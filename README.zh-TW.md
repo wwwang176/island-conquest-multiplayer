@@ -12,7 +12,8 @@
 ## 快速開始
 
 ```bash
-npx http-server -p 8080 -c-1 --cors
+npm install
+npm start
 ```
 
 在瀏覽器中開啟 `http://localhost:8080`。

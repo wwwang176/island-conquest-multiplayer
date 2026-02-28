@@ -12,7 +12,8 @@ Built with **Three.js** + **cannon-es**, no build tools or bundlers required.
 ## Quick Start
 
 ```bash
-npx http-server -p 8080 -c-1 --cors
+npm install
+npm start
 ```
 
 Open `http://localhost:8080` in your browser.
