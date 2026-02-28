@@ -1,4 +1,5 @@
 import * as CANNON from 'cannon-es';
+import { TICK_INTERVAL } from '../shared/constants.js';
 
 /**
  * Server-side physics world (cannon-es).
@@ -30,6 +31,6 @@ export class ServerPhysics {
     }
 
     step(dt) {
-        this.world.step(1 / 64, dt, 2);
+        this.world.step(TICK_INTERVAL, dt, 2);
     }
 }
