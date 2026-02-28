@@ -3,7 +3,7 @@
  */
 
 // Server tick rate
-export const TICK_RATE = 32;
+export const TICK_RATE = 64;
 export const TICK_INTERVAL = 1 / TICK_RATE;  // ~15.625ms
 
 // Map dimensions (must match Island.js)
