@@ -13,6 +13,7 @@ export const MAP_DEPTH = 120;
 // Players
 export const MAX_PLAYERS = 10;
 export const TEAM_SIZE = 15;  // AI soldiers per team
+export const AI_UPDATES_PER_TICK = 8;  // how many AI controllers update per tick (staggered)
 
 // Gameplay
 export const RESPAWN_DELAY = 5;  // seconds

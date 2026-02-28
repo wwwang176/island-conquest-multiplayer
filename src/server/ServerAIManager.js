@@ -8,6 +8,7 @@ import { SquadTemplates } from '../ai/Personality.js';
 import { TeamIntel } from '../ai/TeamIntel.js';
 import { SquadCoordinator } from '../ai/SquadCoordinator.js';
 import { ThreatMap } from '../ai/ThreatMap.js';
+import { AI_UPDATES_PER_TICK } from '../shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -451,8 +452,8 @@ export class ServerAIManager {
         this.threatMapA.update(dt, teamAEnemies);
         this.threatMapB.update(dt, teamBEnemies);
 
-        // Staggered updates — 8 AIs per tick
-        const updatesPerFrame = 8;
+        // Staggered updates
+        const updatesPerFrame = AI_UPDATES_PER_TICK;
         for (let i = 0; i < updatesPerFrame; i++) {
             const idx = (this.updateIndex + i) % this.totalAI;
 
