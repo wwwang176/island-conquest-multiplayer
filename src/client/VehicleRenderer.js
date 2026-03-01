@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const TEAM_COLORS = {
@@ -13,6 +14,9 @@ const ROTOR_SPEED_ACTIVE = 25;   // rad/s when occupied
 const ROTOR_SPEED_IDLE = 8;      // rad/s when unoccupied but alive
 const ROTOR_SPEED_CRASH = 3;     // rad/s when crashing
 const TAIL_ROTOR_MULT = 1.5;
+
+const CRASH_MAX_SPEED = 40;
+const CRASH_MAX_SPEED_SQ = CRASH_MAX_SPEED * CRASH_MAX_SPEED;
 
 export const HELI_PILOT_OFFSET = { x: 0, y: -1.15, z: 1.4 };
 
@@ -34,6 +38,8 @@ export class VehicleRenderer {
         this.scene = scene;
         /** @type {Map<number, VehicleEntry>} */
         this.vehicles = new Map();
+        /** @type {CANNON.World|null} Client-side ragdoll physics world — set by ClientGame */
+        this.ragdollWorld = null;
     }
 
     /**
@@ -61,6 +67,8 @@ export class VehicleRenderer {
             // Snap position on respawn (alive flips false → true) so
             // the helicopter doesn't lerp from its crash site.
             if (vd.alive && !entry.alive) {
+                if (entry.crashBody) this._cleanupCrashBody(entry);
+                entry.crashFinished = false;
                 entry.mesh.position.set(vd.x, vd.y, vd.z);
                 entry.mesh.rotation.set(0, vd.yaw, 0);
                 entry.attitudeGroup.rotation.set(0, 0, 0);
@@ -82,16 +90,20 @@ export class VehicleRenderer {
             entry.pilotId = vd.pilotId;
             entry.passengerIds = [vd.passenger0, vd.passenger1, vd.passenger2, vd.passenger3];
 
-            // Interpolation targets
-            entry.targetX = vd.x;
-            entry.targetY = vd.y;
-            entry.targetZ = vd.z;
-            entry.targetYaw = vd.yaw;
-            entry.targetPitch = vd.pitch;
-            entry.targetRoll = vd.roll;
+            // During crash state, local physics (or pre-crash position) drives the mesh —
+            // skip server interpolation targets entirely.
+            if (!entry.crashBody && !vd.crashing) {
+                entry.targetX = vd.x;
+                entry.targetY = vd.y;
+                entry.targetZ = vd.z;
+                entry.targetYaw = vd.yaw;
+                entry.targetPitch = vd.pitch;
+                entry.targetRoll = vd.roll;
+            }
 
-            // Visibility
-            const visible = vd.alive || vd.crashing;
+            // Visibility — visible if alive, or crash body active, or server says crashing
+            // but client hasn't finished its crash animation yet
+            const visible = vd.alive || !!entry.crashBody || (vd.crashing && !entry.crashFinished);
             entry.mesh.visible = visible;
 
             // Team stripe color
@@ -105,6 +117,7 @@ export class VehicleRenderer {
         // Remove vehicles no longer in snapshot
         for (const [id, entry] of this.vehicles) {
             if (!seen.has(id)) {
+                if (entry.crashBody) this._cleanupCrashBody(entry);
                 this.scene.remove(entry.mesh);
                 this.vehicles.delete(id);
             }
@@ -119,7 +132,36 @@ export class VehicleRenderer {
         for (const [, entry] of this.vehicles) {
             if (!entry.mesh.visible) continue;
 
-            // Smooth position interpolation
+            // ── Client-side crash physics ──
+            if (entry.crashBody) {
+                // Clamp velocity to prevent physics explosions from terrain overlap
+                const v = entry.crashBody.velocity;
+                const spd2 = v.x * v.x + v.y * v.y + v.z * v.z;
+                if (spd2 > CRASH_MAX_SPEED_SQ) {
+                    const s = CRASH_MAX_SPEED / Math.sqrt(spd2);
+                    v.x *= s; v.y *= s; v.z *= s;
+                }
+
+                const bp = entry.crashBody.position;
+                const bq = entry.crashBody.quaternion;
+                entry.mesh.position.set(bp.x, bp.y, bp.z);
+                entry.mesh.quaternion.set(bq.x, bq.y, bq.z, bq.w);
+                entry.attitudeGroup.rotation.set(0, 0, 0);
+
+                // Rotor wind-down during crash
+                entry.rotorMesh.rotation.y += ROTOR_SPEED_CRASH * dt;
+                entry.tailRotorMesh.rotation.x += ROTOR_SPEED_CRASH * TAIL_ROTOR_MULT * dt;
+
+                entry.crashTimer -= dt;
+                if (entry.crashTimer <= 0) {
+                    this._cleanupCrashBody(entry);
+                    entry.crashFinished = true;
+                    entry.mesh.visible = false;
+                }
+                continue;
+            }
+
+            // ── Normal interpolation ──
             const lerp = 1 - Math.exp(-12 * dt);
             const pos = entry.mesh.position;
             const dx = entry.targetX - pos.x;
@@ -200,6 +242,63 @@ export class VehicleRenderer {
             });
         }
         return result;
+    }
+
+    /**
+     * Spawn a client-side CANNON body to simulate crash wreckage locally at 60fps.
+     * Uses the same 3-box compound shape as the server helicopter.
+     */
+    startCrashPhysics(vehicleId, evData) {
+        const entry = this.vehicles.get(vehicleId);
+        if (!entry || !this.ragdollWorld) return;
+
+        // Already has a crash body — ignore duplicate event
+        if (entry.crashBody) return;
+
+        const body = new CANNON.Body({
+            mass: 300,
+            linearDamping: 0.1,
+            angularDamping: 0.3,
+            allowSleep: false,
+        });
+
+        // 3-box compound shape — mirrors ServerHelicopter.initPhysicsBody
+        body.addShape(
+            new CANNON.Box(new CANNON.Vec3(0.9, 0.7, 2.5)),
+            new CANNON.Vec3(0, -0.15, 0)
+        );
+        body.addShape(
+            new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)),
+            new CANNON.Vec3(0, -0.2, 2.8)
+        );
+        body.addShape(
+            new CANNON.Box(new CANNON.Vec3(0.2, 0.2, 1.8)),
+            new CANNON.Vec3(0, 0.1, -3.2)
+        );
+
+        // Position from event data
+        body.position.set(evData.x, evData.y, evData.z);
+
+        // Quaternion from current mesh (onSnapshot baked attitude on crash start)
+        const mq = entry.mesh.quaternion;
+        body.quaternion.set(mq.x, mq.y, mq.z, mq.w);
+
+        // Velocity from event data
+        body.velocity.set(evData.vx, evData.vy, evData.vz);
+        body.angularVelocity.set(evData.avx, evData.avy, evData.avz);
+
+        this.ragdollWorld.addBody(body);
+        entry.crashBody = body;
+        entry.crashTimer = 10;
+        entry.mesh.visible = true;
+    }
+
+    _cleanupCrashBody(entry) {
+        if (entry.crashBody && this.ragdollWorld) {
+            this.ragdollWorld.removeBody(entry.crashBody);
+        }
+        entry.crashBody = null;
+        entry.crashTimer = 0;
     }
 
     // ── Internal ──
@@ -347,6 +446,9 @@ export class VehicleRenderer {
             targetX: 0, targetY: 0, targetZ: 0,
             targetYaw: 0, targetPitch: 0, targetRoll: 0,
             enterRadius: 3,
+            crashBody: null,
+            crashTimer: 0,
+            crashFinished: false,
         };
     }
 }

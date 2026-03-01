@@ -579,7 +579,7 @@ export function encodeEventBatch(events) {
                 break;
             case EventType.VEHICLE_DESTROYED:
                 encoded.push(null);
-                dataSize += 13; // vehicleId(1) + posXYZ(12)
+                dataSize += 37; // vehicleId(1) + posXYZ(12) + velXYZ(12) + angVelXYZ(12)
                 break;
             case EventType.GAME_OVER:
                 encoded.push(null);
@@ -657,7 +657,13 @@ export function encodeEventBatch(events) {
                 view.setFloat32(offset + 1, ev.x ?? 0, true);
                 view.setFloat32(offset + 5, ev.y ?? 0, true);
                 view.setFloat32(offset + 9, ev.z ?? 0, true);
-                offset += 13;
+                view.setFloat32(offset + 13, ev.vx ?? 0, true);
+                view.setFloat32(offset + 17, ev.vy ?? 0, true);
+                view.setFloat32(offset + 21, ev.vz ?? 0, true);
+                view.setFloat32(offset + 25, ev.avx ?? 0, true);
+                view.setFloat32(offset + 29, ev.avy ?? 0, true);
+                view.setFloat32(offset + 33, ev.avz ?? 0, true);
+                offset += 37;
                 break;
             case EventType.GAME_OVER:
                 view.setUint8(offset, ev.winner === 'teamA' ? 0 : 1);
@@ -747,8 +753,14 @@ export function decodeEventBatch(buf) {
                     x: view.getFloat32(offset + 1, true),
                     y: view.getFloat32(offset + 5, true),
                     z: view.getFloat32(offset + 9, true),
+                    vx: view.getFloat32(offset + 13, true),
+                    vy: view.getFloat32(offset + 17, true),
+                    vz: view.getFloat32(offset + 21, true),
+                    avx: view.getFloat32(offset + 25, true),
+                    avy: view.getFloat32(offset + 29, true),
+                    avz: view.getFloat32(offset + 33, true),
                 });
-                offset += 13;
+                offset += 37;
                 break;
             case EventType.GAME_OVER:
                 events.push({
