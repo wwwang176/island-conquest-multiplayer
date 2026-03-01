@@ -382,9 +382,9 @@ export class ServerSoldier {
         this.body.updateMassProperties();
         this.body.quaternion.set(0, 0, 0, 1);
         this.body.angularVelocity.set(0, 0, 0);
-        this.body.position.set(position.x, position.y + 1, position.z);
+        this.body.position.set(position.x, position.y + 0.05, position.z);
         this.body.velocity.set(0, 0, 0);
-        this.mesh.position.set(position.x, position.y + 1, position.z);
+        this.mesh.position.set(position.x, position.y + 0.05, position.z);
         this.ragdollActive = false;
 
         if (this.kinematic) {
