@@ -326,10 +326,10 @@ export class ClientGame {
             <h1>Island Conquest</h1>
             <p style="margin-bottom:12px">LAN Multiplayer</p>
             <div style="display:flex;gap:8px;align-items:center">
-                <input id="server-url" type="text" value="ws://${location.hostname || 'localhost'}:${location.port || '8088'}"
+                <input id="server-url" type="text" value="${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname || 'localhost'}${location.protocol === 'https:' ? '' : ':' + (location.port || '80')}"
                     style="padding:8px 12px;font-size:16px;border:none;border-radius:4px;width:280px;
                     background:rgba(255,255,255,0.9);color:#333;outline:none"
-                    placeholder="ws://192.168.1.x:8088" />
+                    placeholder="wss://yourdomain.com" />
                 <button id="connect-btn"
                     style="padding:8px 20px;font-size:16px;border:none;border-radius:4px;
                     background:#4488ff;color:#fff;cursor:pointer;font-weight:bold">
