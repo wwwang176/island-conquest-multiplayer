@@ -95,7 +95,7 @@ export class NetworkClient {
 
     _sendPing() {
         if (!this.connected) return;
-        const buf = encodePing(performance.now());
+        const buf = encodePing(performance.now(), Math.round(this.rtt));
         this.ws.send(buf);
     }
 
@@ -167,9 +167,9 @@ export class NetworkClient {
                 break;
             }
             case MsgType.SCOREBOARD_SYNC: {
-                const entries = decodeScoreboardSync(buf);
+                const data = decodeScoreboardSync(buf);
                 if (this.onScoreboardSync) {
-                    this.onScoreboardSync(entries);
+                    this.onScoreboardSync(data.entries, data.spectatorCount);
                 }
                 break;
             }
