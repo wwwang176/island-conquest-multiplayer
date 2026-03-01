@@ -217,9 +217,11 @@ export class EntityRenderer {
                 if (entry.gun) entry.gun.visible = true;
                 entry.mesh.rotation.set(0, 0, 0);
                 if (entry.upperBody) entry.upperBody.rotation.set(0, 0, 0);
+                if (entry.shoulderPivot) entry.shoulderPivot.rotation.set(0, 0, 0);
                 if (entry.lowerBody) entry.lowerBody.rotation.set(0, 0, 0);
                 if (entry.leftLeg) entry.leftLeg.rotation.set(0, 0, 0);
                 if (entry.rightLeg) entry.rightLeg.rotation.set(0, 0, 0);
+                entry.walkPhase = 0;
 
                 // Swap gun model if weapon changed on respawn
                 if (e.weaponId !== entry.weaponId) {

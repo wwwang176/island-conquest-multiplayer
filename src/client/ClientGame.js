@@ -1120,6 +1120,11 @@ export class ClientGame {
         const stubCover = { register() {} };
         this.island = new Island(this.scene, ragdollPhysics, stubCover, seed);
 
+        // Build NavGrid for client-side collision prediction (async, non-blocking)
+        this.island.buildNavGridAsync().then(({ navGrid }) => {
+            this._navGrid = navGrid;
+        });
+
         // Create flags
         this._setupFlags();
 
@@ -2689,9 +2694,25 @@ export class ClientGame {
             return;
         }
 
-        // Position update (no NavGrid — server corrects)
-        const newX = fps.predictedPos.x + fps.velX * dt;
-        const newZ = fps.predictedPos.z + fps.velZ * dt;
+        // Position update with NavGrid collision
+        let newX = fps.predictedPos.x + fps.velX * dt;
+        let newZ = fps.predictedPos.z + fps.velZ * dt;
+
+        if (this._navGrid) {
+            const g = this._navGrid.worldToGrid(newX, newZ);
+            if (!this._navGrid.isWalkable(g.col, g.row)) {
+                const gX = this._navGrid.worldToGrid(newX, fps.predictedPos.z);
+                const gZ = this._navGrid.worldToGrid(fps.predictedPos.x, newZ);
+                if (this._navGrid.isWalkable(gX.col, gX.row)) {
+                    newZ = fps.predictedPos.z;
+                } else if (this._navGrid.isWalkable(gZ.col, gZ.row)) {
+                    newX = fps.predictedPos.x;
+                } else {
+                    return; // fully blocked
+                }
+            }
+        }
+
         const newGroundY = getH(newX, newZ);
         const slopeRise = newGroundY - fps.predictedPos.y;
         const stepX = newX - fps.predictedPos.x;
