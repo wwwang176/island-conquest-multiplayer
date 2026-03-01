@@ -121,17 +121,21 @@ export function decodeWorldSeed(buf) {
 
 // ── Ping / Pong ──
 
-export function encodePing(clientTimestamp) {
-    const buf = new ArrayBuffer(9);
+export function encodePing(clientTimestamp, rtt) {
+    const buf = new ArrayBuffer(11);
     const view = new DataView(buf);
     view.setUint8(0, MsgType.PING);
     view.setFloat64(1, clientTimestamp, true);
+    view.setUint16(9, (rtt ?? 0) & 0xFFFF, true);
     return buf;
 }
 
 export function decodePing(buf) {
     const view = new DataView(buf);
-    return { clientTimestamp: view.getFloat64(1, true) };
+    return {
+        clientTimestamp: view.getFloat64(1, true),
+        rtt: buf.byteLength >= 11 ? view.getUint16(9, true) : 0,
+    };
 }
 
 export function encodePong(clientTimestamp, serverTimestamp) {
@@ -817,15 +821,17 @@ export function decodeInputAck(buf) {
 // ── ScoreboardSync ──
 
 /**
- * Encode scoreboard sync: msgType(1) + count(2) + entries[].
- * Each entry: nameLen(1) + name(var) + team(1) + weapon(1) + kills(2) + deaths(2) = 7 + nameLen
- * @param {Array<{name:string, team:string, weaponId:string, kills:number, deaths:number}>} entries
+ * Encode scoreboard sync: msgType(1) + count(2) + entries[] + spectatorCount(1).
+ * Each entry: nameLen(1) + name(var) + team(1) + weapon(1) + kills(2) + deaths(2) + ping(2) = 9 + nameLen
+ * @param {Array<{name:string, team:string, weaponId:string, kills:number, deaths:number, ping?:number}>} entries
+ * @param {number} [spectatorCount=0]
  */
-export function encodeScoreboardSync(entries) {
+export function encodeScoreboardSync(entries, spectatorCount) {
     const encoder = new TextEncoder();
     const encoded = entries.map(e => encoder.encode(e.name));
     let size = 3; // header: msgType(1) + count(2)
-    for (const nb of encoded) size += 7 + nb.length;
+    for (const nb of encoded) size += 9 + nb.length;
+    size += 1; // spectatorCount
 
     const buf = new ArrayBuffer(size);
     const view = new DataView(buf);
@@ -843,8 +849,10 @@ export function encodeScoreboardSync(entries) {
         view.setUint8(offset + 2 + nb.length, weaponToId(e.weaponId));
         view.setUint16(offset + 3 + nb.length, e.kills, true);
         view.setUint16(offset + 5 + nb.length, e.deaths, true);
-        offset += 7 + nb.length;
+        view.setUint16(offset + 7 + nb.length, (e.ping ?? 0) & 0xFFFF, true);
+        offset += 9 + nb.length;
     }
+    view.setUint8(offset, spectatorCount ?? 0);
     return buf;
 }
 
@@ -862,8 +870,10 @@ export function decodeScoreboardSync(buf) {
         const weaponId = idToWeapon(view.getUint8(offset + 2 + nameLen));
         const kills = view.getUint16(offset + 3 + nameLen, true);
         const deaths = view.getUint16(offset + 5 + nameLen, true);
-        entries.push({ name, team, weaponId, kills, deaths });
-        offset += 7 + nameLen;
+        const ping = view.getUint16(offset + 7 + nameLen, true);
+        entries.push({ name, team, weaponId, kills, deaths, ping });
+        offset += 9 + nameLen;
     }
-    return entries;
+    const spectatorCount = offset < buf.byteLength ? view.getUint8(offset) : 0;
+    return { entries, spectatorCount };
 }

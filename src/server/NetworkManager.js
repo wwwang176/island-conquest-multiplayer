@@ -101,7 +101,7 @@ export class NetworkManager {
 
     _onConnection(ws) {
         const clientId = this._nextClientId++;
-        this.clients.set(ws, { clientId, joinedTick: this.serverGame.tick });
+        this.clients.set(ws, { clientId, joinedTick: this.serverGame.tick, rtt: 0 });
 
         console.log(`[WS] Client ${clientId} connected (total: ${this.clients.size})`);
         this.serverGame.onClientConnected(clientId, ws);
@@ -157,6 +157,9 @@ export class NetworkManager {
                 const ping = decodePing(buf);
                 const pong = encodePong(ping.clientTimestamp, performance.now());
                 this.send(ws, pong);
+                // Store client-reported RTT
+                const info = this.clients.get(ws);
+                if (info) info.rtt = ping.rtt || 0;
                 break;
             }
             default:
@@ -228,5 +231,25 @@ export class NetworkManager {
 
     get clientCount() {
         return this.clients.size;
+    }
+
+    /**
+     * Get a client's last reported RTT in ms.
+     * @param {number} clientId
+     * @returns {number}
+     */
+    getClientRtt(clientId) {
+        for (const [, info] of this.clients) {
+            if (info.clientId === clientId) return info.rtt || 0;
+        }
+        return 0;
+    }
+
+    /**
+     * Number of connected clients that are NOT in-game players.
+     * @returns {number}
+     */
+    getSpectatorCount() {
+        return Math.max(0, this.clients.size - this.serverGame.players.size);
     }
 }

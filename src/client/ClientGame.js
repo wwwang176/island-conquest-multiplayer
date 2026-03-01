@@ -220,6 +220,8 @@ export class ClientGame {
         // ── Scoreboard (Tab key) ──
         this._scoreboard = {}; // playerName → { kills, deaths, team, weapon }
         this._playerNames = new Map(); // entityId → playerName
+        this._spectatorCount = 0;
+        this._playerPings = {}; // playerName → ping ms
         this._createScoreboard();
 
         // ── HUD ──
@@ -306,8 +308,8 @@ export class ClientGame {
             console.log(`[Client] Join rejected: ${reason}`);
             this._createJoinUI(reason);
         };
-        this.network.onScoreboardSync = (entries) => {
-            this._onScoreboardSync(entries);
+        this.network.onScoreboardSync = (entries, spectatorCount) => {
+            this._onScoreboardSync(entries, spectatorCount);
         };
         this.network.onConnected = () => this._onConnected();
         this.network.onDisconnected = () => this._onDisconnected();
@@ -679,13 +681,16 @@ export class ClientGame {
         el.id = 'scoreboard';
         el.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
             background:rgba(0,0,0,0.8);border-radius:10px;padding:20px 28px;
-            display:none;align-items:flex-start;gap:32px;
+            display:none;flex-direction:column;
             pointer-events:none;z-index:150;font-family:Consolas,monospace;
             min-width:600px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.1);`;
         el.innerHTML = `
-            <div id="sb-teamA" style="flex:1;min-width:260px;"></div>
-            <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;"></div>
-            <div id="sb-teamB" style="flex:1;min-width:260px;"></div>`;
+            <div style="display:flex;align-items:flex-start;gap:32px;">
+                <div id="sb-teamA" style="flex:1;min-width:280px;"></div>
+                <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;"></div>
+                <div id="sb-teamB" style="flex:1;min-width:280px;"></div>
+            </div>
+            <div id="sb-spectators" style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);display:none;"></div>`;
         document.body.appendChild(el);
         this._scoreboardEl = el;
     }
@@ -707,7 +712,7 @@ export class ClientGame {
         const teamAList = [];
         const teamBList = [];
         for (const [name, stat] of Object.entries(this._scoreboard)) {
-            const entry = { name, ...stat };
+            const entry = { name, ...stat, ping: this._playerPings[name] ?? 0 };
             if (stat.team === 'teamA') teamAList.push(entry);
             else teamBList.push(entry);
         }
@@ -716,13 +721,15 @@ export class ClientGame {
 
         const localName = this._fps.playerName;
 
+        const pingColor = (ms) => ms < 30 ? '#6f6' : ms < 80 ? '#ff4' : '#f66';
+
         const renderTeam = (entries, teamColor, teamLabel) => {
             let totalK = 0, totalD = 0;
             for (const e of entries) { totalK += e.kills; totalD += e.deaths; }
             let html = `<div style="color:${teamColor};font-weight:bold;font-size:16px;margin-bottom:8px;text-align:center;">${teamLabel}</div>`;
             html += `<div style="display:flex;color:#888;font-size:11px;padding:2px 6px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:2px;">
                 <span style="flex:1">Name</span><span style="width:30px;text-align:center">K</span>
-                <span style="width:30px;text-align:center">D</span><span style="width:50px;text-align:right">Wpn</span></div>`;
+                <span style="width:30px;text-align:center">D</span><span style="width:50px;text-align:center">Wpn</span><span style="width:48px;text-align:right">Ping</span></div>`;
             for (const e of entries) {
                 const isPlayer = e.name === localName && this._fps.myEntityId >= 0;
                 const com = this._isCOM(e.name);
@@ -730,22 +737,36 @@ export class ClientGame {
                 const bg = isPlayer ? 'rgba(255,255,255,0.1)' : 'transparent';
                 const nameColor = isPlayer ? '#fff' : 'rgba(255,255,255,0.75)';
                 const wpn = e.weapon || '-';
+                const pingStr = com ? '<span style="color:#555">-</span>' : `<span style="color:${pingColor(e.ping)}">${e.ping}ms</span>`;
                 html += `<div style="display:flex;font-size:12px;padding:2px 6px;background:${bg};border-radius:2px;">
                     <span style="flex:1;color:${nameColor};font-weight:${isPlayer ? 'bold' : 'normal'}">${displayName}</span>
                     <span style="width:30px;text-align:center;color:#ccc">${e.kills}</span>
                     <span style="width:30px;text-align:center;color:#ccc">${e.deaths}</span>
-                    <span style="width:50px;text-align:right;color:#888;font-size:11px">${escapeHTML(wpn)}</span></div>`;
+                    <span style="width:50px;text-align:center;color:#888;font-size:11px">${escapeHTML(wpn)}</span>
+                    <span style="width:48px;text-align:right;font-size:11px">${pingStr}</span></div>`;
             }
             html += `<div style="display:flex;font-size:12px;padding:4px 6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.1);color:#aaa;">
                 <span style="flex:1;font-weight:bold">Total</span>
                 <span style="width:30px;text-align:center">${totalK}</span>
                 <span style="width:30px;text-align:center">${totalD}</span>
-                <span style="width:50px"></span></div>`;
+                <span style="width:50px"></span><span style="width:48px"></span></div>`;
             return html;
         };
 
         document.getElementById('sb-teamA').innerHTML = renderTeam(teamAList, '#4488ff', 'TEAM A');
         document.getElementById('sb-teamB').innerHTML = renderTeam(teamBList, '#ff4444', 'TEAM B');
+
+        // Spectators section
+        const specEl = document.getElementById('sb-spectators');
+        if (specEl) {
+            if (this._spectatorCount > 0) {
+                specEl.innerHTML = `<span style="color:#888;font-size:11px;">Spectators: ${this._spectatorCount}</span>`;
+                specEl.style.display = 'block';
+            } else {
+                specEl.style.display = 'none';
+            }
+        }
+
         this._scoreboardEl.style.display = 'flex';
     }
 
@@ -778,7 +799,7 @@ export class ClientGame {
         this._scoreboard[victimName].team = victimTeam;
     }
 
-    _onScoreboardSync(entries) {
+    _onScoreboardSync(entries, spectatorCount) {
         for (const e of entries) {
             this._scoreboard[e.name] = {
                 kills: e.kills,
@@ -786,6 +807,12 @@ export class ClientGame {
                 team: e.team,
                 weapon: e.weaponId,
             };
+            if (e.ping !== undefined) {
+                this._playerPings[e.name] = e.ping;
+            }
+        }
+        if (spectatorCount !== undefined) {
+            this._spectatorCount = spectatorCount;
         }
     }
 
@@ -1806,6 +1833,8 @@ export class ClientGame {
             this._scoreboard[`B-${i}`] = { kills: 0, deaths: 0, team: 'teamB', weapon: '' };
         }
         this._playerNames.clear();
+        this._playerPings = {};
+        this._spectatorCount = 0;
 
         // Clear kill feed
         if (this.killFeed) {

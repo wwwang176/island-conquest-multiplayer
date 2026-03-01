@@ -397,6 +397,13 @@ export class ServerGame {
             }
         }
 
+        // Periodic scoreboard sync (every 128 ticks ≈ 2s)
+        if (this.network && this.network.clientCount > 0 && this.tick % 128 === 0) {
+            const sbEntries = this._buildScoreboardEntries();
+            const spectatorCount = this.network.getSpectatorCount();
+            this.network.broadcast(encodeScoreboardSync(sbEntries, spectatorCount));
+        }
+
         // Events
         if (this.eventQueue.length > 0 && this.network && this.network.clientCount > 0) {
             const batchEvents = this._buildEventBatch();
@@ -761,6 +768,33 @@ export class ServerGame {
     }
 
     /**
+     * Build scoreboard entries with per-player ping for SCOREBOARD_SYNC.
+     */
+    _buildScoreboardEntries() {
+        return this.entities.map(e => {
+            const isPlayer = e.isPlayer;
+            const name = isPlayer
+                ? (e.playerName || e.id)
+                : `${e.team === 'teamA' ? 'A' : 'B'}-${e.id}`;
+            let ping = 0;
+            if (isPlayer && this.network) {
+                // Look up clientId for this player entity
+                for (const [cid, p] of this.players) {
+                    if (p === e) { ping = this.network.getClientRtt(cid); break; }
+                }
+            }
+            return {
+                name,
+                team: e.team,
+                weaponId: isPlayer ? (e.weaponId || 'AR15') : (e.controller?.weaponId || 'AR15'),
+                kills: e._kills || 0,
+                deaths: e._deaths || 0,
+                ping,
+            };
+        });
+    }
+
+    /**
      * Handle E-key vehicle interaction (rising edge) for a player.
      */
     _handlePlayerVehicleInteract(player) {
@@ -793,20 +827,9 @@ export class ServerGame {
         this.network.send(ws, worldSeed);
 
         // Send accumulated scoreboard so late joiners see existing kills/deaths
-        const sbEntries = this.entities.map(e => {
-            const isPlayer = e.isPlayer;
-            const name = isPlayer
-                ? (e.playerName || e.id)
-                : `${e.team === 'teamA' ? 'A' : 'B'}-${e.id}`;
-            return {
-                name,
-                team: e.team,
-                weaponId: isPlayer ? (e.weaponId || 'AR15') : (e.controller?.weaponId || 'AR15'),
-                kills: e._kills || 0,
-                deaths: e._deaths || 0,
-            };
-        });
-        this.network.send(ws, encodeScoreboardSync(sbEntries));
+        const sbEntries = this._buildScoreboardEntries();
+        const spectatorCount = this.network.getSpectatorCount();
+        this.network.send(ws, encodeScoreboardSync(sbEntries, spectatorCount));
 
         console.log(`[Game] Client ${clientId} connected — sent WorldSeed (seed=${this.seed.toFixed(2)})`);
     }
