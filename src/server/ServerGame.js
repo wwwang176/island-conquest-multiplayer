@@ -749,6 +749,12 @@ export class ServerGame {
                         x: ev.x,
                         y: ev.y,
                         z: ev.z,
+                        vx: ev.vx,
+                        vy: ev.vy,
+                        vz: ev.vz,
+                        avx: ev.avx,
+                        avy: ev.avy,
+                        avz: ev.avz,
                     });
                     break;
                 case 'roundCountdown':

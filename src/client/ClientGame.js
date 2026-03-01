@@ -1127,8 +1127,9 @@ export class ClientGame {
         this.tracerSystem = new TracerSystem(this.scene);
         this.impactVFX = new ImpactVFX(this.scene, (x, z) => this.island.getHeightAt(x, z));
 
-        // Wire ragdoll references to EntityRenderer
+        // Wire ragdoll references to EntityRenderer and VehicleRenderer
         this.entityRenderer.ragdollWorld = this._ragdollWorld;
+        this.vehicleRenderer.ragdollWorld = this._ragdollWorld;
         this.entityRenderer.impactVFX = this.impactVFX;
         this.entityRenderer.getHeightAt = (x, z) => this.island.getHeightAt(x, z);
 
@@ -1491,6 +1492,7 @@ export class ClientGame {
                             null
                         );
                     }
+                    this.vehicleRenderer.startCrashPhysics(ev.vehicleId, ev);
                     break;
 
                 case EventType.GAME_OVER:

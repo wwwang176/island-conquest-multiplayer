@@ -287,17 +287,14 @@ export class ServerHelicopter {
     /** Sync mesh position/rotation from body + attitude. For raycasting. */
     syncMesh() {
         if (!this.alive && !this._crashing) return;
-        if (this._crashing && this.body) {
-            const p = this.body.position;
-            const q = this.body.quaternion;
-            this.mesh.position.set(p.x, p.y, p.z);
-            this.mesh.quaternion.set(q.x, q.y, q.z, q.w);
-            this._attitudeGroup.rotation.set(0, 0, 0);
-        } else {
-            this.mesh.rotation.y = this.rotationY;
-            this._attitudeGroup.rotation.x = this._visualPitch;
-            this._attitudeGroup.rotation.z = this._visualRoll;
+        if (this._crashing) {
+            // Server no longer simulates crash physics (moved to client-side).
+            // Mesh stays at last valid position; snapshot sends that to clients.
+            return;
         }
+        this.mesh.rotation.y = this.rotationY;
+        this._attitudeGroup.rotation.x = this._visualPitch;
+        this._attitudeGroup.rotation.z = this._visualRoll;
     }
 
     // ── Occupant management ──
@@ -395,6 +392,8 @@ export class ServerHelicopter {
         this._crashing = true;
         this._wreckageTimer = 0;
 
+        // Apply random angular velocity for crash tumble, then capture kinematics
+        let vx = 0, vy = 0, vz = 0, avx = 0, avy = 0, avz = 0;
         if (this.body) {
             this.body.linearDamping = 0.1;
             this.body.angularDamping = 0.3;
@@ -403,17 +402,34 @@ export class ServerHelicopter {
                 this.body.angularVelocity.y + (Math.random() - 0.5) * 2,
                 (Math.random() - 0.5) * 3
             );
+            vx = this.body.velocity.x;
+            vy = this.body.velocity.y;
+            vz = this.body.velocity.z;
+            avx = this.body.angularVelocity.x;
+            avy = this.body.angularVelocity.y;
+            avz = this.body.angularVelocity.z;
         }
 
         this._killAllOccupants();
 
-        // Emit destruction event
+        // Emit destruction event with kinematics for client-side crash physics
         if (this.eventBus) {
             const p = this.mesh.position;
             this.eventBus.emit('vehicleDestroyed', {
                 vehicleId: this.vehicleId,
                 x: p.x, y: p.y, z: p.z,
+                vx, vy, vz,
+                avx, avy, avz,
             });
+        }
+
+        // Freeze server body — crash physics is now client-side
+        if (this.body) {
+            this.body.velocity.set(0, 0, 0);
+            this.body.angularVelocity.set(0, 0, 0);
+            this.body.force.set(0, 0, 0);
+            this.body.torque.set(0, 0, 0);
+            this.body.position.set(0, -999, 0);
         }
     }
 
@@ -623,30 +639,12 @@ export class ServerHelicopter {
     }
 
     _updateCrash(dt) {
-        if (this.body) {
-            const p = this.body.position;
-            const q = this.body.quaternion;
-            this.mesh.position.set(p.x, p.y, p.z);
-            // Extract physics rotation into snapshot values (YXZ to match client)
-            _threeQuat.set(q.x, q.y, q.z, q.w);
-            _euler.setFromQuaternion(_threeQuat, 'YXZ');
-            this.rotationY = _euler.y;
-            this._visualPitch = _euler.x;
-            this._visualRoll = _euler.z;
-        }
-        this.mesh.updateMatrixWorld(true);
-
+        // Server no longer simulates wreckage physics (moved to client-side).
+        // Just count down the wreckage timer.
         this._wreckageTimer += dt;
         if (this._wreckageTimer >= 10) {
             this._crashing = false;
             this.respawnTimer = this.respawnDelay;
-            if (this.body) {
-                this.body.velocity.set(0, 0, 0);
-                this.body.angularVelocity.set(0, 0, 0);
-                this.body.force.set(0, 0, 0);
-                this.body.torque.set(0, 0, 0);
-                this.body.position.set(0, -999, 0);
-            }
         }
     }
 

@@ -135,8 +135,7 @@ export class ServerVehicleManager {
     getVehicleMeshes() {
         const meshes = [];
         for (const v of this.vehicles) {
-            const visible = v.alive || (v._crashing && v.mesh);
-            if (!visible || !v.mesh) continue;
+            if (!v.alive || !v.mesh) continue;
             meshes.push(v.mesh);
         }
         return meshes;

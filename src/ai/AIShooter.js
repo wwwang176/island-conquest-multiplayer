@@ -427,14 +427,8 @@ export function fireShot(ctx) {
                         _aiHitPayload.victimTeam = vehicle.team;
                         ctx.eventBus.emit('aiHit', _aiHitPayload);
                     }
-                    if (result.destroyed && ctx.eventBus) {
-                        ctx.eventBus.emit('vehicleDestroyed', {
-                            destroyerName: myName,
-                            destroyerTeam: ctx.team,
-                            vehicleTeam: vehicle.team,
-                            vehicleType: vehicle.type,
-                        });
-                    }
+                    // Vehicle destruction event is emitted by ServerHelicopter.destroy()
+                    // — no need to emit here.
                     return;
                 }
                 break;
