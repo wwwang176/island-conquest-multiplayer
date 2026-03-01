@@ -22,8 +22,8 @@ export const SCORE_INTERVAL = 3;  // seconds between scoring ticks
 export const ROUND_COUNTDOWN = 30; // seconds between game over and round restart
 
 // Network
-export const DEFAULT_PORT = 8080;
-export const HTTP_PORT = 8080;
+export const DEFAULT_PORT = 80;
+export const HTTP_PORT = 80;
 export const INTERPOLATION_DELAY = 2;  // ticks behind server time for remote entities
 export const PREDICTION_TOLERANCE = 0.1;  // meters; below this, no correction
 
