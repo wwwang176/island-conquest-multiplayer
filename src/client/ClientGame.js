@@ -276,8 +276,8 @@ export class ClientGame {
         });
 
         // ── Network callbacks ──
-        this.network.onWorldSeed = (seed, flagLayout, entityCount) => {
-            this._onWorldSeed(seed, flagLayout, entityCount);
+        this.network.onWorldSeed = (seed, flagLayout, entityCount, timeOfDay) => {
+            this._onWorldSeed(seed, flagLayout, entityCount, timeOfDay);
         };
         this.network.onSnapshot = (tick, entities, flags, scores, vehicles) => {
             this._onSnapshot(tick, entities, flags, scores, vehicles);
@@ -1048,7 +1048,8 @@ export class ClientGame {
     // ═══════════════════════════════════════════════════════
 
     _setupLighting() {
-        this.scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        this._ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        this.scene.add(this._ambientLight);
 
         const sun = new THREE.DirectionalLight(0xfff5e0, 1.0);
         sun.position.set(50, 80, 30);
@@ -1063,7 +1064,55 @@ export class ClientGame {
         this.scene.add(sun);
         this._sun = sun;
 
-        this.scene.add(new THREE.HemisphereLight(0x87CEEB, 0x556B2F, 0.3));
+        this._hemiLight = new THREE.HemisphereLight(0x87CEEB, 0x556B2F, 0.3);
+        this.scene.add(this._hemiLight);
+    }
+
+    _applyTimeOfDay(tod) {
+        const presets = [
+            { // 0 = Day (defaults, no changes needed)
+                clearColor: 0x87CEEB, fogColor: 0x87CEEB, fogNear: 100, fogFar: 300,
+                sunColor: 0xfff5e0, sunIntensity: 1.0, sunPos: [50, 80, 30],
+                ambientColor: 0xffffff, ambientIntensity: 0.5,
+                hemiSky: 0x87CEEB, hemiGround: 0x556B2F, hemiIntensity: 0.3,
+                shadows: true,
+            },
+            { // 1 = Dusk (golden hour — warm but not overly orange)
+                clearColor: 0xC9A878, fogColor: 0xC9A878, fogNear: 90, fogFar: 270,
+                sunColor: 0xFFAA60, sunIntensity: 0.85, sunPos: [70, 40, 50],
+                ambientColor: 0xFFDDB0, ambientIntensity: 0.4,
+                hemiSky: 0xC9A878, hemiGround: 0x665530, hemiIntensity: 0.28,
+                shadows: true,
+            },
+            { // 2 = Night (bright moonlit — clearly visible)
+                clearColor: 0x2a2a50, fogColor: 0x2a2a50, fogNear: 80, fogFar: 280,
+                sunColor: 0x6688cc, sunIntensity: 0.5, sunPos: [50, 80, 30],
+                ambientColor: 0x334477, ambientIntensity: 0.5,
+                hemiSky: 0x2a2a50, hemiGround: 0x333333, hemiIntensity: 0.35,
+                shadows: true,
+            },
+        ];
+
+        const p = presets[tod] || presets[0];
+        const todNames = ['Day', 'Dusk', 'Night'];
+        console.log(`[Client] Applying time of day: ${todNames[tod] || 'Day'}`);
+
+        this.renderer.setClearColor(p.clearColor);
+        this.scene.fog.color.setHex(p.fogColor);
+        this.scene.fog.near = p.fogNear;
+        this.scene.fog.far = p.fogFar;
+
+        this._sun.color.setHex(p.sunColor);
+        this._sun.intensity = p.sunIntensity;
+        this._sun.position.set(p.sunPos[0], p.sunPos[1], p.sunPos[2]);
+        this._sun.castShadow = p.shadows;
+
+        this._ambientLight.color.setHex(p.ambientColor);
+        this._ambientLight.intensity = p.ambientIntensity;
+
+        this._hemiLight.color.setHex(p.hemiSky);
+        this._hemiLight.groundColor.setHex(p.hemiGround);
+        this._hemiLight.intensity = p.hemiIntensity;
     }
 
     // ═══════════════════════════════════════════════════════
@@ -1111,8 +1160,10 @@ export class ClientGame {
         }
     }
 
-    _onWorldSeed(seed, flagLayout, entityCount) {
-        console.log('[Client] WorldSeed received: seed=', seed, 'entities=', entityCount);
+    _onWorldSeed(seed, flagLayout, entityCount, timeOfDay) {
+        console.log('[Client] WorldSeed received: seed=', seed, 'entities=', entityCount, 'timeOfDay=', timeOfDay);
+        this._timeOfDay = timeOfDay ?? 0;
+        this._applyTimeOfDay(this._timeOfDay);
 
         // Prefill all AI soldiers into scoreboard
         for (let i = 0; i < TEAM_SIZE; i++) {

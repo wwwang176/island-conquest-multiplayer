@@ -46,6 +46,11 @@ export class ServerGame {
         // Entity ID counter (AI gets 0..N-1, players get N+)
         this._nextEntityId = 0;
 
+        // Time of day: 0=day, 1=dusk, 2=night
+        this.timeOfDay = Math.floor(Math.random() * 3);
+        const todNames = ['Day', 'Dusk', 'Night'];
+        console.log(`[Game] Time of day: ${todNames[this.timeOfDay]} (${this.timeOfDay})`);
+
         // Event queue — collected during tick, broadcast at end
         this.eventQueue = [];
 
@@ -829,7 +834,7 @@ export class ServerGame {
      */
     onClientConnected(clientId, ws) {
         // Send world seed so client can generate matching terrain
-        const worldSeed = encodeWorldSeed(this.seed, 0, this.entities.length);
+        const worldSeed = encodeWorldSeed(this.seed, 0, this.entities.length, this.timeOfDay);
         this.network.send(ws, worldSeed);
 
         // Send accumulated scoreboard so late joiners see existing kills/deaths
