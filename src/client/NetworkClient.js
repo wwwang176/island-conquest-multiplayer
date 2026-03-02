@@ -17,7 +17,7 @@ export class NetworkClient {
         this.rtt = 0; // round-trip time in ms
 
         // Callbacks (set by ClientGame)
-        this.onWorldSeed = null;       // (seed, flagLayout, entityCount)
+        this.onWorldSeed = null;       // (seed, flagLayout, entityCount, timeOfDay)
         this.onSnapshot = null;        // (tick, entities, flags, scores, vehicles)
         this.onEvents = null;          // (events[])
         this.onPlayerSpawned = null;   // (playerId, x, y, z, team, weaponId)
@@ -108,7 +108,7 @@ export class NetworkClient {
                 const data = decodeWorldSeed(buf);
                 console.log('[Net] WorldSeed:', data);
                 if (this.onWorldSeed) {
-                    this.onWorldSeed(data.seed, data.flagLayout, data.entityCount);
+                    this.onWorldSeed(data.seed, data.flagLayout, data.entityCount, data.timeOfDay);
                 }
                 break;
             }

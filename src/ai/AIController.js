@@ -71,13 +71,17 @@ export class AIController {
         // Mission pressure: 0.0 capturing, 0.5 moving, 1.0 idle
         this.missionPressure = 0.5;
 
+        // Storm debuff multipliers (set by ServerAIManager.applyTimeOfDay)
+        this.reactionMult = 1.0;
+        this.accuracyMult = 1.0;
+
         // Aim state
         this.aimPoint = new THREE.Vector3();
         this.aimOffset = new THREE.Vector3();
         this._preAimActive = false;
         this.reactionTimer = 0;
         this.hasReacted = false;
-        this.aimCorrectionSpeed = 2 + this.personality.aimSkill * 3;
+        this.aimCorrectionSpeed = (2 + this.personality.aimSkill * 3) * this.accuracyMult;
 
         // Weapon definition — personality-weighted random
         this.weaponId = this._pickWeapon();
@@ -722,8 +726,8 @@ export class AIController {
                     // angleFactor: baseline 0.933 so that 30° (dot≈0.866) yields 1.0 (unchanged),
                     // crosshair center is slightly faster, FOV edge (~102°) reaches ~1.53
                     const angleFactor = 0.933 + 0.5 * (1 - closestDot);
-                    this.reactionTimer = p.reactionTime / 1000 * distFactor * losFactor * angleFactor +
-                        (Math.random() * 0.15);
+                    this.reactionTimer = p.reactionTime / 1000 * distFactor * losFactor * angleFactor *
+                        this.reactionMult + (Math.random() * 0.15);
                     const aimSpread = Math.max(0.3, Math.min(1.0, closestDist / 25));
                     this.aimOffset.set(
                         (Math.random() - 0.5) * 2 * aimSpread,
