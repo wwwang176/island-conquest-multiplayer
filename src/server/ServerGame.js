@@ -132,6 +132,9 @@ export class ServerGame {
         for (const s of this.aiManager.teamA.soldiers) this.entities.push(s);
         for (const s of this.aiManager.teamB.soldiers) this.entities.push(s);
 
+        // Apply time-of-day debuffs to AI (before spawning)
+        this.aiManager.applyTimeOfDay(this.timeOfDay);
+
         // Spawn all AI at their base flags
         this.aiManager.spawnAll();
 

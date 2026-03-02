@@ -70,6 +70,9 @@ export class ServerAIManager {
         this.threatMapA = new ThreatMap();
         this.threatMapB = new ThreatMap();
 
+        // Night debuff: sight range multiplier (set by applyTimeOfDay)
+        this.sightMultiplier = 1.0;
+
         this.teamA = { soldiers: [], controllers: [], squads: [] };
         this.teamB = { soldiers: [], controllers: [], squads: [] };
 
@@ -140,6 +143,27 @@ export class ServerAIManager {
 
             teamData.squads.push(coordinator);
         }
+    }
+
+    /**
+     * Apply time-of-day debuffs to AI.
+     * @param {number} tod - 0=day, 1=dusk, 2=night
+     */
+    applyTimeOfDay(tod) {
+        const isNight = tod === 2;
+        this.sightMultiplier = isNight ? 0.6 : 1.0;
+        const reactionMult = isNight ? 1.5 : 1.0;
+        const accuracyMult = isNight ? 0.7 : 1.0;
+
+        const allControllers = [...this.teamA.controllers, ...this.teamB.controllers];
+        for (const ctrl of allControllers) {
+            ctrl.reactionMult = reactionMult;
+            ctrl.accuracyMult = accuracyMult;
+            ctrl.aimCorrectionSpeed = (2 + ctrl.personality.aimSkill * 3) * accuracyMult;
+        }
+
+        const todNames = ['Day', 'Dusk', 'Night'];
+        console.log(`[AI] Time-of-day: ${todNames[tod]} — sight ×${this.sightMultiplier}, accuracy ×${accuracyMult}, reaction ×${reactionMult}`);
     }
 
     setNavGrid(grid, heightGrid, obstacleBounds) {
@@ -238,7 +262,8 @@ export class ServerAIManager {
             aiData[off + 3] = ctrl.facingDir.x * cp;
             aiData[off + 4] = Math.sin(pitch);
             aiData[off + 5] = ctrl.facingDir.z * cp;
-            aiData[off + 6] = ctrl.vehicle ? ctrl.vehicle.detectionRange : 80;
+            const baseRange = ctrl.vehicle ? ctrl.vehicle.detectionRange : 80;
+            aiData[off + 6] = baseRange * this.sightMultiplier;
             aiData[off + 7] = (s.alive ? 1 : 0) | (inHeli ? 2 : 0);
         }
 
