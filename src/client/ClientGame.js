@@ -1086,14 +1086,14 @@ export class ClientGame {
                 hemiSky: 0xC9A878, hemiGround: 0x665530, hemiIntensity: 0.28,
                 shadows: true,
             },
-            { // 2 = Storm (dark overcast rain)
-                clearColor: 0x556666, fogColor: 0x556666,
+            { // 2 = Storm (overcast rain)
+                clearColor: 0x607272, fogColor: 0x607272,
                 fogNear: 40, fogFar: 180,
-                sunColor: 0x889999, sunIntensity: 0.35,
+                sunColor: 0x99aabb, sunIntensity: 0.45,
                 sunPos: [50, 80, 30],
-                ambientColor: 0x667777, ambientIntensity: 0.45,
-                hemiSky: 0x556666, hemiGround: 0x3a4a3a, hemiIntensity: 0.25,
-                shadows: false,
+                ambientColor: 0x778888, ambientIntensity: 0.55,
+                hemiSky: 0x6a7d7d, hemiGround: 0x4a5a4a, hemiIntensity: 0.3,
+                shadows: true,
             },
         ];
 
