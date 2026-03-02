@@ -2788,9 +2788,6 @@ export class ClientGame {
         const maxClimbAngle = Math.PI * 0.42;
 
         if (slopeAngle < maxClimbAngle) {
-            if (newGroundY < 0) {
-                return;
-            }
             fps.predictedPos.x = newX;
             fps.predictedPos.z = newZ;
             if (!fps.isJumping) fps.predictedPos.y = newGroundY + 0.05;
