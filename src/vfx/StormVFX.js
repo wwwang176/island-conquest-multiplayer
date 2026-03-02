@@ -29,28 +29,54 @@ const LIT_DECAY = 4;
 
 const DEAD_Y = -9999;
 
+// Normalized rain velocity direction in world space
+const _rainDir = new THREE.Vector3(WIND_X, -RAIN_SPEED, WIND_Z).normalize();
+
 // ── Rain shaders ──
 const rainVertexShader = /* glsl */`
+    uniform vec3 uRainDir;
     attribute float aOpacity;
     varying float vOpacity;
+    varying vec2 vStreakDir;
     void main() {
         vOpacity = aOpacity;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        // Large point so the fragment shader can carve a thin vertical streak
-        gl_PointSize = max(2.0, 10.0 * (200.0 / -mvPosition.z));
+
+        // Perspective-correct per-particle screen-space velocity
+        // Analytic derivative of perspective projection: no w-divide instability
+        vec3 vp = mvPosition.xyz;                         // view-space position
+        vec3 vd = mat3(modelViewMatrix) * uRainDir;       // view-space rain dir
+        float negZ = -vp.z;                               // positive depth
+        vec2 sv = vec2(
+            (vd.x * negZ + vp.x * vd.z) * projectionMatrix[0][0],
+            (vd.y * negZ + vp.y * vd.z) * projectionMatrix[1][1]
+        );
+        float len = length(sv);
+        vStreakDir = len > 0.001 ? sv / len : vec2(0.0, -1.0);
+
+        // Per-particle streak scale: rain aimed at this particle → dot, perpendicular → full streak
+        float cosAim = abs(dot(normalize(vd), normalize(vp)));
+        float streakScale = 1.0 - cosAim;
+        gl_PointSize = max(2.0, 10.0 * streakScale * (200.0 / negZ));
         gl_Position = projectionMatrix * mvPosition;
     }
 `;
 
 const rainFragmentShader = /* glsl */`
     varying float vOpacity;
+    varying vec2 vStreakDir;
     void main() {
-        vec2 uv = gl_PointCoord;
-        // Hair-thin vertical streak
-        float xDist = abs(uv.x - 0.5);
-        float maskX = smoothstep(0.008, 0.0, xDist);     // sub-pixel hairline
-        float maskY = smoothstep(0.5, 0.05, abs(uv.y - 0.5)); // full height, soft tips
-        float mask = maskX * maskY;
+        vec2 uv = gl_PointCoord - vec2(0.5);
+        // Flip Y: gl_PointCoord Y goes down, clip space Y goes up
+        vec2 dir = vec2(vStreakDir.x, -vStreakDir.y);
+        // Decompose UV into along-streak and across-streak axes
+        float along = dot(uv, dir);
+        vec2 perp = uv - along * dir;
+        float across = length(perp);
+
+        float maskAcross = smoothstep(0.008, 0.0, across);  // sub-pixel hairline
+        float maskAlong  = smoothstep(0.5, 0.05, abs(along)); // full length, soft tips
+        float mask = maskAcross * maskAlong;
         if (mask < 0.01) discard;
         gl_FragColor = vec4(0.75, 0.8, 0.85, vOpacity * mask * 0.5);
     }
@@ -132,6 +158,9 @@ export class StormVFX {
         geo.setAttribute('aOpacity', new THREE.BufferAttribute(opacities, 1));
 
         const mat = new THREE.ShaderMaterial({
+            uniforms: {
+                uRainDir: { value: _rainDir },
+            },
             vertexShader: rainVertexShader,
             fragmentShader: rainFragmentShader,
             transparent: true,
