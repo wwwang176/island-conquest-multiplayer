@@ -871,8 +871,12 @@ export class ClientGame {
                     ${this._weaponCardHTML('join-wp', 3, 'LMG', 'lmg', false)}
                     ${this._weaponCardHTML('join-wp', 4, 'BOLT', 'bolt', false)}
                 </div>
-                <div style="font-size:16px;color:#aaa;margin-top:10px;">
-                    Press <b style="color:#fff">SPACE</b> to deploy &nbsp; | &nbsp; <b style="color:#fff">ESC</b> to go back
+                <div style="display:flex;gap:12px;margin-top:16px;">
+                    <button id="join-back-btn" style="padding:8px 24px;font-size:14px;border:1px solid #666;
+                        border-radius:4px;background:transparent;color:#aaa;cursor:pointer">Back (Esc)</button>
+                    <button id="join-deploy-btn" style="padding:8px 32px;font-size:16px;font-weight:bold;
+                        border:2px solid #4488ff;border-radius:4px;background:rgba(68,136,255,0.3);
+                        color:#fff;cursor:pointer">DEPLOY (Space)</button>
                 </div>
             </div>
         `;
@@ -904,7 +908,28 @@ export class ClientGame {
             if (card) card.addEventListener('click', () => highlightJoinWeapon(wid));
         }
 
-        // Keyboard handler — weapon selection (Digit1-4) + deploy (Space) in step 2
+        // Deploy action (shared by button click and Space key)
+        const deployAction = () => {
+            document.removeEventListener('keydown', this._joinKeyHandler);
+            this._joinKeyHandler = null;
+            panel.remove();
+            this._joinGame(this._joinTeam, selectedWeapon, this._joinName);
+        };
+
+        // Back action (shared by button click and Esc key)
+        const backAction = () => {
+            this._joinStep = 1;
+            document.getElementById('join-step2').style.display = 'none';
+            document.getElementById('join-step1').style.display = 'flex';
+        };
+
+        // Deploy button
+        document.getElementById('join-deploy-btn').addEventListener('click', deployAction);
+
+        // Back button
+        document.getElementById('join-back-btn').addEventListener('click', backAction);
+
+        // Keyboard handler — weapon selection (Digit1-4) + deploy (Space) + back (Esc) in step 2
         this._joinKeyHandler = (e) => {
             if (this._joinStep !== 2) return;
             const weaponKeys = { Digit1: 'AR15', Digit2: 'SMG', Digit3: 'LMG', Digit4: 'BOLT' };
@@ -912,11 +937,9 @@ export class ClientGame {
                 highlightJoinWeapon(weaponKeys[e.code]);
             }
             if (e.code === 'Space') {
-                document.removeEventListener('keydown', this._joinKeyHandler);
-                this._joinKeyHandler = null;
-                panel.remove();
-                this._joinGame(this._joinTeam, selectedWeapon, this._joinName);
+                deployAction();
             }
+            // Escape is handled by the global keydown handler (avoids double-fire)
         };
         document.addEventListener('keydown', this._joinKeyHandler);
 
@@ -992,7 +1015,9 @@ export class ClientGame {
         const border = selected ? '#4488ff' : '#888';
         const bg = selected ? 'rgba(68,136,255,0.15)' : 'transparent';
         return `<div id="${idPrefix}-${shortId}" style="border:2px solid ${border};border-radius:8px;padding:10px 14px;
-            background:${bg};cursor:pointer;min-width:140px;">
+            background:${bg};cursor:pointer;min-width:140px;transition:background 0.15s,border-color 0.15s;"
+            onmouseenter="if(this.style.borderColor!=='rgb(68, 136, 255)')this.style.background='rgba(255,255,255,0.07)'"
+            onmouseleave="if(this.style.borderColor!=='rgb(68, 136, 255)')this.style.background='transparent'">
             <div style="font-size:16px;font-weight:bold;">[${num}] ${def.name}</div>
             <div style="font-size:11px;color:#aaa;margin-top:3px;">${def.fireRate} RPM &middot; ${def.magazineSize} rds</div>
             ${this._weaponStatBars(weaponId)}
@@ -1868,7 +1893,7 @@ export class ClientGame {
             el.id = 'death-overlay';
             el.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;
                 background:rgba(139,0,0,0.3);display:flex;align-items:center;justify-content:center;
-                flex-direction:column;pointer-events:none;z-index:101;`;
+                flex-direction:column;z-index:101;`;
             el.innerHTML = `
                 <div style="color:white;font-family:Arial,sans-serif;text-align:center;">
                     <div style="font-size:36px;font-weight:bold;margin-bottom:10px;">YOU DIED</div>
@@ -1882,8 +1907,14 @@ export class ClientGame {
                             ${this._weaponCardHTML('mp-wp', 4, 'BOLT', 'bolt', false)}
                         </div>
                     </div>
-                    <div id="mp-respawn-prompt" style="font-size:16px;color:#aaa;margin-top:10px;display:none;">
-                        Press <b>SPACE</b> to respawn &nbsp; | &nbsp; <b>ESC</b> to spectate
+                    <div id="mp-respawn-prompt" style="display:none;flex-direction:column;align-items:center;margin-top:14px;gap:10px;">
+                        <div style="display:flex;gap:12px;">
+                            <button id="mp-spectate-btn" style="padding:8px 24px;font-size:14px;border:1px solid #666;
+                                border-radius:4px;background:transparent;color:#aaa;cursor:pointer">Spectate (Esc)</button>
+                            <button id="mp-respawn-btn" style="padding:8px 32px;font-size:16px;font-weight:bold;
+                                border:2px solid #4488ff;border-radius:4px;background:rgba(68,136,255,0.3);
+                                color:#fff;cursor:pointer">RESPAWN (Space)</button>
+                        </div>
                     </div>
                 </div>`;
             document.body.appendChild(el);
@@ -1928,8 +1959,9 @@ export class ClientGame {
                 const wpSelect = document.getElementById('mp-weapon-select');
                 if (wpSelect) wpSelect.style.display = 'block';
                 const prompt = document.getElementById('mp-respawn-prompt');
-                if (prompt) prompt.style.display = 'block';
+                if (prompt) prompt.style.display = 'flex';
                 this._highlightDeathWeapon(this._deathSelectedWeapon);
+                this._bindDeathClickHandlers();
             }
         }
     }
@@ -1947,6 +1979,40 @@ export class ClientGame {
                 card.style.background = 'transparent';
             }
         }
+    }
+
+    _bindDeathClickHandlers() {
+        if (this._deathClicksBound) return;
+        this._deathClicksBound = true;
+
+        // Weapon card clicks
+        const wpMap = { 'mp-wp-ar': 'AR15', 'mp-wp-smg': 'SMG', 'mp-wp-lmg': 'LMG', 'mp-wp-bolt': 'BOLT' };
+        for (const [elId, wid] of Object.entries(wpMap)) {
+            const card = document.getElementById(elId);
+            if (card) card.addEventListener('click', () => {
+                if (!this._deathCanRespawn) return;
+                this._deathSelectedWeapon = wid;
+                this._highlightDeathWeapon(wid);
+            });
+        }
+
+        // Respawn button
+        const respawnBtn = document.getElementById('mp-respawn-btn');
+        if (respawnBtn) respawnBtn.addEventListener('click', () => {
+            if (!this._deathCanRespawn) return;
+            const weaponId = this._deathSelectedWeapon || 'AR15';
+            this._fps.weaponId = weaponId;
+            const def = WeaponDefs[weaponId];
+            this._fps.moveSpeed = MOVE_SPEED * (def?.moveSpeedMult || 1.0);
+            this.network.sendRespawn(weaponId);
+        });
+
+        // Spectate button
+        const spectateBtn = document.getElementById('mp-spectate-btn');
+        if (spectateBtn) spectateBtn.addEventListener('click', () => {
+            if (!this._deathCanRespawn) return;
+            this._leaveGame();
+        });
     }
 
     _startDeathLerp(killerEntityId) {
