@@ -29,7 +29,8 @@ const _aimDirVec = new THREE.Vector3();
  */
 export class ServerPlayer extends ServerSoldier {
     constructor(physics, team, id, clientId, playerName, weaponId) {
-        super(physics, team, id, false); // dynamic body
+        super(physics, team, id, true);  // kinematic body — prevents physics drift
+        this.addToPhysics(); // Player needs body in physics world for raycast hit detection
 
         this.isPlayer = true;
         this.clientId = clientId;
@@ -599,6 +600,7 @@ export class ServerPlayer extends ServerSoldier {
 
     respawn(position) {
         super.respawn(position);
+        this.addToPhysics(); // Kinematic body removed by super.respawn(); re-add for raycast
 
         // Reset weapon state
         const def = WeaponDefs[this.weaponId];
