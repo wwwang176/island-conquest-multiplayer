@@ -98,15 +98,16 @@ export function decodeFloat16(int16, scale) {
 // ── WorldSeed Message ──
 
 /**
- * Serialize WorldSeed: msgType(1) + seed(4) + flagLayout(1) + entityCount(2) = 8 bytes
+ * Serialize WorldSeed: msgType(1) + seed(4) + flagLayout(1) + entityCount(2) + timeOfDay(1) = 9 bytes
  */
-export function encodeWorldSeed(seed, flagLayout, entityCount) {
-    const buf = new ArrayBuffer(8);
+export function encodeWorldSeed(seed, flagLayout, entityCount, timeOfDay) {
+    const buf = new ArrayBuffer(9);
     const view = new DataView(buf);
     view.setUint8(0, MsgType.WORLD_SEED);
     view.setFloat32(1, seed, true);
     view.setUint8(5, flagLayout);
     view.setUint16(6, entityCount, true);
+    view.setUint8(8, timeOfDay ?? 0);
     return buf;
 }
 
@@ -116,6 +117,7 @@ export function decodeWorldSeed(buf) {
         seed: view.getFloat32(1, true),
         flagLayout: view.getUint8(5),
         entityCount: view.getUint16(6, true),
+        timeOfDay: buf.byteLength >= 9 ? view.getUint8(8) : 0,
     };
 }
 

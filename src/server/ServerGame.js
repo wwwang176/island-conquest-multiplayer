@@ -46,6 +46,11 @@ export class ServerGame {
         // Entity ID counter (AI gets 0..N-1, players get N+)
         this._nextEntityId = 0;
 
+        // Time of day: 0=day, 1=dusk, 2=storm
+        this.timeOfDay = Math.floor(Math.random() * 3);
+        const todNames = ['Day', 'Dusk', 'Storm'];
+        console.log(`[Game] Time of day: ${todNames[this.timeOfDay]} (${this.timeOfDay})`);
+
         // Event queue — collected during tick, broadcast at end
         this.eventQueue = [];
 
@@ -126,6 +131,9 @@ export class ServerGame {
         // Populate entities list with all AI soldiers
         for (const s of this.aiManager.teamA.soldiers) this.entities.push(s);
         for (const s of this.aiManager.teamB.soldiers) this.entities.push(s);
+
+        // Apply time-of-day debuffs to AI (before spawning)
+        this.aiManager.applyTimeOfDay(this.timeOfDay);
 
         // Spawn all AI at their base flags
         this.aiManager.spawnAll();
@@ -829,7 +837,7 @@ export class ServerGame {
      */
     onClientConnected(clientId, ws) {
         // Send world seed so client can generate matching terrain
-        const worldSeed = encodeWorldSeed(this.seed, 0, this.entities.length);
+        const worldSeed = encodeWorldSeed(this.seed, 0, this.entities.length, this.timeOfDay);
         this.network.send(ws, worldSeed);
 
         // Send accumulated scoreboard so late joiners see existing kills/deaths

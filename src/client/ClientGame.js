@@ -4,6 +4,7 @@ import { Island } from '../world/Island.js';
 import { FlagPoint } from '../world/FlagPoint.js';
 import { TracerSystem } from '../vfx/TracerSystem.js';
 import { ImpactVFX } from '../vfx/ImpactVFX.js';
+import { StormVFX } from '../vfx/StormVFX.js';
 import { Minimap } from '../ui/Minimap.js';
 import { KillFeed } from '../ui/KillFeed.js';
 import { SpectatorHUD } from '../ui/SpectatorHUD.js';
@@ -152,6 +153,7 @@ export class ClientGame {
         // ── VFX (initialized after island) ──
         this.tracerSystem = null;
         this.impactVFX = null;
+        this.stormVFX = null;
 
         // ── UI ──
         this.minimap = null;
@@ -276,8 +278,8 @@ export class ClientGame {
         });
 
         // ── Network callbacks ──
-        this.network.onWorldSeed = (seed, flagLayout, entityCount) => {
-            this._onWorldSeed(seed, flagLayout, entityCount);
+        this.network.onWorldSeed = (seed, flagLayout, entityCount, timeOfDay) => {
+            this._onWorldSeed(seed, flagLayout, entityCount, timeOfDay);
         };
         this.network.onSnapshot = (tick, entities, flags, scores, vehicles) => {
             this._onSnapshot(tick, entities, flags, scores, vehicles);
@@ -1048,7 +1050,8 @@ export class ClientGame {
     // ═══════════════════════════════════════════════════════
 
     _setupLighting() {
-        this.scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        this._ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        this.scene.add(this._ambientLight);
 
         const sun = new THREE.DirectionalLight(0xfff5e0, 1.0);
         sun.position.set(50, 80, 30);
@@ -1063,7 +1066,57 @@ export class ClientGame {
         this.scene.add(sun);
         this._sun = sun;
 
-        this.scene.add(new THREE.HemisphereLight(0x87CEEB, 0x556B2F, 0.3));
+        this._hemiLight = new THREE.HemisphereLight(0x87CEEB, 0x556B2F, 0.3);
+        this.scene.add(this._hemiLight);
+    }
+
+    _applyTimeOfDay(tod) {
+        const presets = [
+            { // 0 = Day (defaults, no changes needed)
+                clearColor: 0x87CEEB, fogColor: 0x87CEEB, fogNear: 100, fogFar: 300,
+                sunColor: 0xfff5e0, sunIntensity: 1.0, sunPos: [50, 80, 30],
+                ambientColor: 0xffffff, ambientIntensity: 0.5,
+                hemiSky: 0x87CEEB, hemiGround: 0x556B2F, hemiIntensity: 0.3,
+                shadows: true,
+            },
+            { // 1 = Dusk (golden hour — warm but not overly orange)
+                clearColor: 0xC9A878, fogColor: 0xC9A878, fogNear: 90, fogFar: 270,
+                sunColor: 0xFFAA60, sunIntensity: 0.85, sunPos: [70, 40, 50],
+                ambientColor: 0xFFDDB0, ambientIntensity: 0.4,
+                hemiSky: 0xC9A878, hemiGround: 0x665530, hemiIntensity: 0.28,
+                shadows: true,
+            },
+            { // 2 = Storm (dark overcast rain)
+                clearColor: 0x556666, fogColor: 0x556666,
+                fogNear: 40, fogFar: 180,
+                sunColor: 0x889999, sunIntensity: 0.35,
+                sunPos: [50, 80, 30],
+                ambientColor: 0x667777, ambientIntensity: 0.45,
+                hemiSky: 0x556666, hemiGround: 0x3a4a3a, hemiIntensity: 0.25,
+                shadows: false,
+            },
+        ];
+
+        const p = presets[tod] || presets[0];
+        const todNames = ['Day', 'Dusk', 'Storm'];
+        console.log(`[Client] Applying time of day: ${todNames[tod] || 'Day'}`);
+
+        this.renderer.setClearColor(p.clearColor);
+        this.scene.fog.color.setHex(p.fogColor);
+        this.scene.fog.near = p.fogNear;
+        this.scene.fog.far = p.fogFar;
+
+        this._sun.color.setHex(p.sunColor);
+        this._sun.intensity = p.sunIntensity;
+        this._sun.position.set(p.sunPos[0], p.sunPos[1], p.sunPos[2]);
+        this._sun.castShadow = p.shadows;
+
+        this._ambientLight.color.setHex(p.ambientColor);
+        this._ambientLight.intensity = p.ambientIntensity;
+
+        this._hemiLight.color.setHex(p.hemiSky);
+        this._hemiLight.groundColor.setHex(p.hemiGround);
+        this._hemiLight.intensity = p.hemiIntensity;
     }
 
     // ═══════════════════════════════════════════════════════
@@ -1111,8 +1164,10 @@ export class ClientGame {
         }
     }
 
-    _onWorldSeed(seed, flagLayout, entityCount) {
-        console.log('[Client] WorldSeed received: seed=', seed, 'entities=', entityCount);
+    _onWorldSeed(seed, flagLayout, entityCount, timeOfDay) {
+        console.log('[Client] WorldSeed received: seed=', seed, 'entities=', entityCount, 'timeOfDay=', timeOfDay);
+        this._timeOfDay = timeOfDay ?? 0;
+        this._applyTimeOfDay(this._timeOfDay);
 
         // Prefill all AI soldiers into scoreboard
         for (let i = 0; i < TEAM_SIZE; i++) {
@@ -1156,6 +1211,16 @@ export class ClientGame {
         // Init VFX
         this.tracerSystem = new TracerSystem(this.scene);
         this.impactVFX = new ImpactVFX(this.scene, (x, z) => this.island.getHeightAt(x, z));
+
+        // Storm VFX (rain + lightning) — only when tod === 2
+        this.stormVFX = null;
+        if (this._timeOfDay === 2) {
+            this.stormVFX = new StormVFX(
+                this.scene, this.camera,
+                { sun: this._sun, ambient: this._ambientLight, hemi: this._hemiLight },
+                (x, z) => this.island.getHeightAt(x, z)
+            );
+        }
 
         // Wire ragdoll references to EntityRenderer and VehicleRenderer
         this.entityRenderer.ragdollWorld = this._ragdollWorld;
@@ -2057,6 +2122,7 @@ export class ClientGame {
         // VFX
         if (this.tracerSystem) this.tracerSystem.update(dt);
         if (this.impactVFX) this.impactVFX.update(dt);
+        if (this.stormVFX) this.stormVFX.update(dt, this.camera.position);
 
         // Step ragdoll physics (only meaningful when ragdoll bodies exist)
         if (this._ragdollWorld) {
