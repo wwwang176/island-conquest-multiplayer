@@ -14,11 +14,11 @@ const WIND_X = 8;            // horizontal wind drift (strong storm)
 const WIND_Z = 3;
 
 // ── Splash config ──
-const SPLASH_COUNT = 800;
-const SPLASH_SPAWN_RATE = 250; // per second
+const SPLASH_COUNT = 2000;
+const SPLASH_SPAWN_RATE = 600; // per second
 const SPLASH_RADIUS = 30;    // spawn radius around camera
-const SPLASH_LIFE_MIN = 0.15;
-const SPLASH_LIFE_MAX = 0.3;
+const SPLASH_LIFE_MIN = 0.08;
+const SPLASH_LIFE_MAX = 0.15;
 
 // ── Lightning state machine ──
 const LIT_IDLE = 0;
@@ -325,9 +325,9 @@ export class StormVFX {
         this._splashPositions[i3 + 2] = rz;
 
         // Small upward + random horizontal velocity
-        this._splashVx[idx] = (Math.random() - 0.5) * 1.5;
-        this._splashVy[idx] = 1.5 + Math.random() * 2;
-        this._splashVz[idx] = (Math.random() - 0.5) * 1.5;
+        this._splashVx[idx] = (Math.random() - 0.5) * 0.75;
+        this._splashVy[idx] = 0.75 + Math.random() * 1;
+        this._splashVz[idx] = (Math.random() - 0.5) * 0.75;
 
         // Life
         const lifeVal = SPLASH_LIFE_MIN + Math.random() * (SPLASH_LIFE_MAX - SPLASH_LIFE_MIN);
@@ -335,7 +335,7 @@ export class StormVFX {
         this._splashMaxLife[idx] = lifeVal;
 
         // Size + opacity
-        this._splashSizes[idx] = 0.3 + Math.random() * 0.4;
+        this._splashSizes[idx] = 0.15 + Math.random() * 0.2;
         this._splashOpacities[idx] = 0.7;
     }
 
