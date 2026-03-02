@@ -4,6 +4,7 @@ import { Island } from '../world/Island.js';
 import { FlagPoint } from '../world/FlagPoint.js';
 import { TracerSystem } from '../vfx/TracerSystem.js';
 import { ImpactVFX } from '../vfx/ImpactVFX.js';
+import { StormVFX } from '../vfx/StormVFX.js';
 import { Minimap } from '../ui/Minimap.js';
 import { KillFeed } from '../ui/KillFeed.js';
 import { SpectatorHUD } from '../ui/SpectatorHUD.js';
@@ -152,6 +153,7 @@ export class ClientGame {
         // ── VFX (initialized after island) ──
         this.tracerSystem = null;
         this.impactVFX = null;
+        this.stormVFX = null;
 
         // ── UI ──
         this.minimap = null;
@@ -1084,17 +1086,19 @@ export class ClientGame {
                 hemiSky: 0xC9A878, hemiGround: 0x665530, hemiIntensity: 0.28,
                 shadows: true,
             },
-            { // 2 = Night (bright moonlit — clearly visible)
-                clearColor: 0x2a2a50, fogColor: 0x2a2a50, fogNear: 80, fogFar: 280,
-                sunColor: 0x6688cc, sunIntensity: 0.5, sunPos: [50, 80, 30],
-                ambientColor: 0x334477, ambientIntensity: 0.5,
-                hemiSky: 0x2a2a50, hemiGround: 0x333333, hemiIntensity: 0.35,
-                shadows: true,
+            { // 2 = Storm (dark overcast rain)
+                clearColor: 0x556666, fogColor: 0x556666,
+                fogNear: 40, fogFar: 180,
+                sunColor: 0x889999, sunIntensity: 0.35,
+                sunPos: [50, 80, 30],
+                ambientColor: 0x667777, ambientIntensity: 0.45,
+                hemiSky: 0x556666, hemiGround: 0x3a4a3a, hemiIntensity: 0.25,
+                shadows: false,
             },
         ];
 
         const p = presets[tod] || presets[0];
-        const todNames = ['Day', 'Dusk', 'Night'];
+        const todNames = ['Day', 'Dusk', 'Storm'];
         console.log(`[Client] Applying time of day: ${todNames[tod] || 'Day'}`);
 
         this.renderer.setClearColor(p.clearColor);
@@ -1207,6 +1211,16 @@ export class ClientGame {
         // Init VFX
         this.tracerSystem = new TracerSystem(this.scene);
         this.impactVFX = new ImpactVFX(this.scene, (x, z) => this.island.getHeightAt(x, z));
+
+        // Storm VFX (rain + lightning) — only when tod === 2
+        this.stormVFX = null;
+        if (this._timeOfDay === 2) {
+            this.stormVFX = new StormVFX(
+                this.scene, this.camera,
+                { sun: this._sun, ambient: this._ambientLight, hemi: this._hemiLight },
+                (x, z) => this.island.getHeightAt(x, z)
+            );
+        }
 
         // Wire ragdoll references to EntityRenderer and VehicleRenderer
         this.entityRenderer.ragdollWorld = this._ragdollWorld;
@@ -2108,6 +2122,7 @@ export class ClientGame {
         // VFX
         if (this.tracerSystem) this.tracerSystem.update(dt);
         if (this.impactVFX) this.impactVFX.update(dt);
+        if (this.stormVFX) this.stormVFX.update(dt, this.camera.position);
 
         // Step ragdoll physics (only meaningful when ragdoll bodies exist)
         if (this._ragdollWorld) {

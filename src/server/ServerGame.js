@@ -46,9 +46,9 @@ export class ServerGame {
         // Entity ID counter (AI gets 0..N-1, players get N+)
         this._nextEntityId = 0;
 
-        // Time of day: 0=day, 1=dusk, 2=night
+        // Time of day: 0=day, 1=dusk, 2=storm
         this.timeOfDay = Math.floor(Math.random() * 3);
-        const todNames = ['Day', 'Dusk', 'Night'];
+        const todNames = ['Day', 'Dusk', 'Storm'];
         console.log(`[Game] Time of day: ${todNames[this.timeOfDay]} (${this.timeOfDay})`);
 
         // Event queue — collected during tick, broadcast at end

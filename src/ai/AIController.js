@@ -71,7 +71,7 @@ export class AIController {
         // Mission pressure: 0.0 capturing, 0.5 moving, 1.0 idle
         this.missionPressure = 0.5;
 
-        // Night debuff multipliers (set by ServerAIManager.applyTimeOfDay)
+        // Storm debuff multipliers (set by ServerAIManager.applyTimeOfDay)
         this.reactionMult = 1.0;
         this.accuracyMult = 1.0;
 
