@@ -226,10 +226,6 @@ export class ServerPlayer extends ServerSoldier {
         const maxClimbAngle = Math.PI * 0.42; // ~75°
 
         if (slopeAngle < maxClimbAngle) {
-            // Reject movement into underwater positions
-            if (newGroundY < 0) {
-                return;
-            }
             pos.x = finalX;
             pos.z = finalZ;
             if (!this.isJumping) pos.y = newGroundY + 0.05;
