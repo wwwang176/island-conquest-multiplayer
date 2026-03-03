@@ -2,7 +2,7 @@ import { MsgType } from '../shared/protocol.js';
 
 // Per-message-type rate limits: { capacity, refillPerSec }
 const RATE_LIMITS = {
-    [MsgType.INPUT]:   { capacity: 300, refillPerSec: 200 }, // support up to ~200fps clients
+    [MsgType.INPUT]:   { capacity: 600, refillPerSec: 500 }, // generous: only blocks extreme flood
     [MsgType.PING]:    { capacity: 3,   refillPerSec: 1   },
     [MsgType.JOIN]:    { capacity: 2,   refillPerSec: 1   },
     [MsgType.RESPAWN]: { capacity: 2,   refillPerSec: 1   },
