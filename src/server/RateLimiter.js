@@ -2,14 +2,15 @@ import { MsgType } from '../shared/protocol.js';
 
 // Per-message-type rate limits: { capacity, refillPerSec }
 const RATE_LIMITS = {
-    [MsgType.INPUT]:   { capacity: 80, refillPerSec: 70 },
-    [MsgType.PING]:    { capacity: 3,  refillPerSec: 1  },
-    [MsgType.JOIN]:    { capacity: 2,  refillPerSec: 1  },
-    [MsgType.RESPAWN]: { capacity: 2,  refillPerSec: 1  },
-    [MsgType.LEAVE]:   { capacity: 2,  refillPerSec: 1  },
+    [MsgType.INPUT]:   { capacity: 300, refillPerSec: 200 }, // support up to ~200fps clients
+    [MsgType.PING]:    { capacity: 3,   refillPerSec: 1   },
+    [MsgType.JOIN]:    { capacity: 2,   refillPerSec: 1   },
+    [MsgType.RESPAWN]: { capacity: 2,   refillPerSec: 1   },
+    [MsgType.LEAVE]:   { capacity: 2,   refillPerSec: 1   },
 };
 
-const VIOLATION_KICK_THRESHOLD = 50;
+const VIOLATION_KICK_THRESHOLD = 100;
+const VIOLATION_DECAY_PER_SEC = 5; // violations decay over time
 
 /**
  * Per-client token bucket rate limiter.
@@ -23,6 +24,7 @@ export class RateLimiter {
             this._buckets[msgType] = { tokens: cfg.capacity, lastRefill: now };
         }
         this._violations = 0;
+        this._lastViolationDecay = now;
     }
 
     /**
@@ -41,6 +43,11 @@ export class RateLimiter {
         bucket.lastRefill = now;
 
         if (bucket.tokens < 1) {
+            // Decay violations over time so transient bursts don't accumulate to a kick
+            const decayElapsed = (now - this._lastViolationDecay) / 1000;
+            this._violations = Math.max(0, this._violations - decayElapsed * VIOLATION_DECAY_PER_SEC);
+            this._lastViolationDecay = now;
+
             this._violations++;
             return this._violations >= VIOLATION_KICK_THRESHOLD ? 'kick' : 'drop';
         }
