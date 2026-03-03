@@ -1,4 +1,4 @@
-import { TICK_RATE, TICK_INTERVAL, WIN_SCORE, MOVE_SPEED, ROUND_COUNTDOWN } from '../shared/constants.js';
+import { TICK_RATE, TICK_INTERVAL, WIN_SCORE, MOVE_SPEED, ROUND_COUNTDOWN, MAX_PLAYERS } from '../shared/constants.js';
 import { WeaponDefs } from '../entities/WeaponDefs.js';
 import {
     encodeWorldSeed, encodeSnapshot, encodeEventBatch, encodeScoreboardSync,
@@ -891,6 +891,19 @@ export class ServerGame {
             console.log(`[Game] Client ${clientId} already in game, ignoring join`);
             return;
         }
+
+        // Enforce MAX_PLAYERS limit
+        if (this.players.size >= MAX_PLAYERS) {
+            console.log(`[Game] Client ${clientId} rejected: server full (${this.players.size}/${MAX_PLAYERS})`);
+            if (this.network) {
+                this.network.sendToClient(clientId, encodeJoinRejected('Server is full'));
+            }
+            return;
+        }
+
+        // Validate weaponId — fall back to AR15 if invalid
+        const validWeapons = ['AR15', 'SMG', 'LMG', 'BOLT'];
+        if (!validWeapons.includes(weaponId)) weaponId = 'AR15';
 
         // ── Sanitize player name ──
         playerName = String(playerName).trim().replace(/[^\w\s\-]/g, '').substring(0, 16).trim();

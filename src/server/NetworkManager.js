@@ -21,6 +21,16 @@ const MIME_TYPES = {
     '.woff2':'font/woff2',
 };
 
+// Rate limit buckets: { capacity, refillPerSec }
+const RATE_LIMITS = {
+    [MsgType.INPUT]:   { capacity: 80, refillPerSec: 70 },
+    [MsgType.PING]:    { capacity: 3,  refillPerSec: 1  },
+    [MsgType.JOIN]:    { capacity: 2,  refillPerSec: 1  },
+    [MsgType.RESPAWN]: { capacity: 2,  refillPerSec: 1  },
+    [MsgType.LEAVE]:   { capacity: 2,  refillPerSec: 1  },
+};
+const VIOLATION_KICK_THRESHOLD = 50; // cumulative drops before disconnect
+
 /**
  * Manages WebSocket connections and serves static files.
  */
@@ -101,7 +111,12 @@ export class NetworkManager {
 
     _onConnection(ws) {
         const clientId = this._nextClientId++;
-        this.clients.set(ws, { clientId, joinedTick: this.serverGame.tick, rtt: 0 });
+        // Initialize rate limit buckets per message type
+        const rateBuckets = {};
+        for (const [msgType, cfg] of Object.entries(RATE_LIMITS)) {
+            rateBuckets[msgType] = { tokens: cfg.capacity, lastRefill: performance.now() };
+        }
+        this.clients.set(ws, { clientId, joinedTick: this.serverGame.tick, rtt: 0, rateBuckets, rateViolations: 0 });
 
         console.log(`[WS] Client ${clientId} connected (total: ${this.clients.size})`);
         this.serverGame.onClientConnected(clientId, ws);
@@ -129,41 +144,82 @@ export class NetworkManager {
         });
     }
 
-    _onMessage(ws, clientId, buf) {
-        if (buf.byteLength < 1) return;
-        const msgType = new DataView(buf).getUint8(0);
+    // Minimum buffer sizes per message type
+    static MIN_BUF_SIZE = {
+        [MsgType.INPUT]:   19, // msgType(1)+tick(4)+keys(2)+mouseDX(2)+mouseDY(2)+yaw(4)+pitch(4)
+        [MsgType.JOIN]:     4, // msgType(1)+teamId(1)+weaponLen(1)+nameLen(1)
+        [MsgType.LEAVE]:    1, // msgType(1)
+        [MsgType.RESPAWN]:  2, // msgType(1)+weaponLen(1)
+        [MsgType.PING]:     9, // msgType(1)+clientTimestamp(8)
+    };
 
-        switch (msgType) {
-            case MsgType.INPUT: {
-                const input = decodeInput(buf);
-                this.serverGame.onClientInput(clientId, input);
-                break;
+    _onMessage(ws, clientId, buf) {
+        try {
+            if (buf.byteLength < 1) return;
+            const msgType = new DataView(buf).getUint8(0);
+
+            // Validate buffer length
+            const minSize = NetworkManager.MIN_BUF_SIZE[msgType];
+            if (minSize && buf.byteLength < minSize) {
+                console.warn(`[WS] Client ${clientId}: truncated msg 0x${msgType.toString(16)} (${buf.byteLength}/${minSize} bytes)`);
+                return;
             }
-            case MsgType.JOIN: {
-                const join = decodeJoin(buf);
-                this.serverGame.onJoinRequest(clientId, join.team, join.weaponId, join.playerName);
-                break;
+
+            // Rate limiting (token bucket)
+            const info = this.clients.get(ws);
+            const rateConfig = RATE_LIMITS[msgType];
+            if (info && rateConfig) {
+                const bucket = info.rateBuckets[msgType];
+                const now = performance.now();
+                const elapsed = (now - bucket.lastRefill) / 1000;
+                bucket.tokens = Math.min(rateConfig.capacity, bucket.tokens + elapsed * rateConfig.refillPerSec);
+                bucket.lastRefill = now;
+                if (bucket.tokens < 1) {
+                    info.rateViolations++;
+                    if (info.rateViolations >= VIOLATION_KICK_THRESHOLD) {
+                        console.warn(`[WS] Client ${clientId}: rate limit exceeded, disconnecting`);
+                        try { ws.close(1008, 'Rate limit exceeded'); } catch (_) {}
+                    }
+                    return; // drop message
+                }
+                bucket.tokens -= 1;
             }
-            case MsgType.LEAVE: {
-                this.serverGame.onLeaveRequest(clientId);
-                break;
+
+            switch (msgType) {
+                case MsgType.INPUT: {
+                    const input = decodeInput(buf);
+                    this.serverGame.onClientInput(clientId, input);
+                    break;
+                }
+                case MsgType.JOIN: {
+                    const join = decodeJoin(buf);
+                    this.serverGame.onJoinRequest(clientId, join.team, join.weaponId, join.playerName);
+                    break;
+                }
+                case MsgType.LEAVE: {
+                    this.serverGame.onLeaveRequest(clientId);
+                    break;
+                }
+                case MsgType.RESPAWN: {
+                    const data = decodeRespawn(buf);
+                    this.serverGame.onRespawnRequest(clientId, data.weaponId);
+                    break;
+                }
+                case MsgType.PING: {
+                    const ping = decodePing(buf);
+                    const pong = encodePong(ping.clientTimestamp, performance.now());
+                    this.send(ws, pong);
+                    // Store client-reported RTT
+                    const info = this.clients.get(ws);
+                    if (info) info.rtt = ping.rtt || 0;
+                    break;
+                }
+                default:
+                    console.warn(`[WS] Unknown message type 0x${msgType.toString(16)} from client ${clientId}`);
             }
-            case MsgType.RESPAWN: {
-                const data = decodeRespawn(buf);
-                this.serverGame.onRespawnRequest(clientId, data.weaponId);
-                break;
-            }
-            case MsgType.PING: {
-                const ping = decodePing(buf);
-                const pong = encodePong(ping.clientTimestamp, performance.now());
-                this.send(ws, pong);
-                // Store client-reported RTT
-                const info = this.clients.get(ws);
-                if (info) info.rtt = ping.rtt || 0;
-                break;
-            }
-            default:
-                console.warn(`[WS] Unknown message type 0x${msgType.toString(16)} from client ${clientId}`);
+        } catch (err) {
+            console.error(`[WS] Error processing message from client ${clientId}:`, err.message);
+            try { ws.close(1008, 'Bad message'); } catch (_) { /* ignore close errors */ }
         }
     }
 
