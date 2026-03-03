@@ -12,6 +12,9 @@ import { ServerGrenadeManager } from './ServerGrenadeManager.js';
 import { ServerVehicleManager } from './ServerVehicleManager.js';
 import { ServerPlayer } from './ServerPlayer.js';
 import { SpawnSystem } from '../systems/SpawnSystem.js';
+
+// Selectable primary weapons (all WeaponDefs entries that have magazineSize)
+const VALID_WEAPONS = Object.keys(WeaponDefs).filter(k => WeaponDefs[k].magazineSize);
 import { CoverSystem } from '../world/CoverSystem.js';
 import { EventBus } from '../core/EventBus.js';
 
@@ -902,8 +905,7 @@ export class ServerGame {
         }
 
         // Validate weaponId — fall back to AR15 if invalid
-        const validWeapons = ['AR15', 'SMG', 'LMG', 'BOLT'];
-        if (!validWeapons.includes(weaponId)) weaponId = 'AR15';
+        if (!VALID_WEAPONS.includes(weaponId)) weaponId = VALID_WEAPONS[0];
 
         // ── Sanitize player name ──
         playerName = String(playerName).trim().replace(/[^\w\s\-]/g, '').substring(0, 16).trim();
@@ -1027,8 +1029,7 @@ export class ServerGame {
         if (player.alive || !player.canRespawn()) return;
 
         // Validate weaponId — fall back to AR15 if invalid
-        const validWeapons = ['AR15', 'SMG', 'LMG', 'BOLT'];
-        if (!validWeapons.includes(weaponId)) weaponId = 'AR15';
+        if (!VALID_WEAPONS.includes(weaponId)) weaponId = VALID_WEAPONS[0];
 
         // Apply new weapon
         player.weaponId = weaponId;
