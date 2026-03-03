@@ -6,7 +6,7 @@ import * as THREE from 'three';
  */
 
 // ── Rain config ──
-const RAIN_COUNT = 4000;
+const RAIN_COUNT = 3000;
 const RAIN_AREA = 60;        // horizontal spread around camera
 const RAIN_HEIGHT = 40;      // vertical range above camera
 const RAIN_SPEED = 37.5;     // fall speed (m/s)
@@ -14,7 +14,7 @@ const WIND_X = 8;            // horizontal wind drift (strong storm)
 const WIND_Z = 3;
 
 // ── Splash config ──
-const SPLASH_COUNT = 2000;
+const SPLASH_COUNT = 6000;
 const SPLASH_SPAWN_RATE = 600; // per second
 const SPLASH_RADIUS = 30;    // spawn radius around camera
 const SPLASH_LIFE_MIN = 0.08;
@@ -27,6 +27,7 @@ const LIT_GAP = 2;
 const LIT_FLASH2 = 3;
 const LIT_DECAY = 4;
 
+const WATER_Y = -0.3;
 const DEAD_Y = -9999;
 
 // Normalized rain velocity direction in world space
@@ -47,9 +48,12 @@ const rainVertexShader = /* glsl */`
         vec3 vp = mvPosition.xyz;                         // view-space position
         vec3 vd = mat3(modelViewMatrix) * uRainDir;       // view-space rain dir
         float negZ = -vp.z;                               // positive depth
+        // View-space derivative only — no projection scaling.
+        // gl_PointCoord is a square in pixel space, so aspect ratio
+        // from projectionMatrix would distort the angle.
         vec2 sv = vec2(
-            (vd.x * negZ + vp.x * vd.z) * projectionMatrix[0][0],
-            (vd.y * negZ + vp.y * vd.z) * projectionMatrix[1][1]
+            vd.x * negZ + vp.x * vd.z,
+            vd.y * negZ + vp.y * vd.z
         );
         float len = length(sv);
         vStreakDir = len > 0.001 ? sv / len : vec2(0.0, -1.0);
@@ -318,10 +322,11 @@ export class StormVFX {
         const rx = camPos.x + (Math.random() - 0.5) * SPLASH_RADIUS * 2;
         const rz = camPos.z + (Math.random() - 0.5) * SPLASH_RADIUS * 2;
         const groundY = this.getHeightAt(rx, rz);
+        const surfaceY = Math.max(groundY, WATER_Y);
 
         const i3 = idx * 3;
         this._splashPositions[i3]     = rx;
-        this._splashPositions[i3 + 1] = groundY + 0.05;
+        this._splashPositions[i3 + 1] = surfaceY + 0.05;
         this._splashPositions[i3 + 2] = rz;
 
         // Small upward + random horizontal velocity
@@ -335,7 +340,7 @@ export class StormVFX {
         this._splashMaxLife[idx] = lifeVal;
 
         // Size + opacity
-        this._splashSizes[idx] = 0.15 + Math.random() * 0.2;
+        this._splashSizes[idx] = 0.225 + Math.random() * 0.3;
         this._splashOpacities[idx] = 0.7;
     }
 

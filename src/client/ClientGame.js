@@ -2114,9 +2114,12 @@ export class ClientGame {
 
         const dt = Math.min(this.clock.getDelta(), 0.1);
 
-        // Island vegetation sway
+        // Island vegetation sway (2× speed during storm)
         if (this.island) {
-            this.island.updateSway(this.clock.elapsedTime);
+            const swayTime = this._timeOfDay === 2
+                ? this.clock.elapsedTime * 2
+                : this.clock.elapsedTime;
+            this.island.updateSway(swayTime);
         }
 
         // VFX
