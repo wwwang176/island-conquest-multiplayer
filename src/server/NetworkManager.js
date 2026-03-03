@@ -3,8 +3,9 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, extname } from 'path';
 import { WebSocketServer } from 'ws';
-import { MsgType, decodeInput, decodeJoin, decodeRespawn, decodePing, encodePong, encodeWorldSeed, encodePlayerJoined, encodePlayerLeft } from '../shared/protocol.js';
+import { MsgType, MSG_MIN_SIZE, decodeInput, decodeJoin, decodeRespawn, decodePing, encodePong, encodeWorldSeed, encodePlayerJoined, encodePlayerLeft } from '../shared/protocol.js';
 import { DEFAULT_PORT, HTTP_PORT } from '../shared/constants.js';
+import { RateLimiter } from './RateLimiter.js';
 
 const MIME_TYPES = {
     '.html': 'text/html',
@@ -20,16 +21,6 @@ const MIME_TYPES = {
     '.woff': 'font/woff',
     '.woff2':'font/woff2',
 };
-
-// Rate limit buckets: { capacity, refillPerSec }
-const RATE_LIMITS = {
-    [MsgType.INPUT]:   { capacity: 80, refillPerSec: 70 },
-    [MsgType.PING]:    { capacity: 3,  refillPerSec: 1  },
-    [MsgType.JOIN]:    { capacity: 2,  refillPerSec: 1  },
-    [MsgType.RESPAWN]: { capacity: 2,  refillPerSec: 1  },
-    [MsgType.LEAVE]:   { capacity: 2,  refillPerSec: 1  },
-};
-const VIOLATION_KICK_THRESHOLD = 50; // cumulative drops before disconnect
 
 /**
  * Manages WebSocket connections and serves static files.
@@ -111,12 +102,7 @@ export class NetworkManager {
 
     _onConnection(ws) {
         const clientId = this._nextClientId++;
-        // Initialize rate limit buckets per message type
-        const rateBuckets = {};
-        for (const [msgType, cfg] of Object.entries(RATE_LIMITS)) {
-            rateBuckets[msgType] = { tokens: cfg.capacity, lastRefill: performance.now() };
-        }
-        this.clients.set(ws, { clientId, joinedTick: this.serverGame.tick, rtt: 0, rateBuckets, rateViolations: 0 });
+        this.clients.set(ws, { clientId, joinedTick: this.serverGame.tick, rtt: 0, rateLimiter: new RateLimiter() });
 
         console.log(`[WS] Client ${clientId} connected (total: ${this.clients.size})`);
         this.serverGame.onClientConnected(clientId, ws);
@@ -144,45 +130,28 @@ export class NetworkManager {
         });
     }
 
-    // Minimum buffer sizes per message type
-    static MIN_BUF_SIZE = {
-        [MsgType.INPUT]:   19, // msgType(1)+tick(4)+keys(2)+mouseDX(2)+mouseDY(2)+yaw(4)+pitch(4)
-        [MsgType.JOIN]:     4, // msgType(1)+teamId(1)+weaponLen(1)+nameLen(1)
-        [MsgType.LEAVE]:    1, // msgType(1)
-        [MsgType.RESPAWN]:  2, // msgType(1)+weaponLen(1)
-        [MsgType.PING]:     9, // msgType(1)+clientTimestamp(8)
-    };
-
     _onMessage(ws, clientId, buf) {
         try {
             if (buf.byteLength < 1) return;
             const msgType = new DataView(buf).getUint8(0);
 
             // Validate buffer length
-            const minSize = NetworkManager.MIN_BUF_SIZE[msgType];
+            const minSize = MSG_MIN_SIZE[msgType];
             if (minSize && buf.byteLength < minSize) {
                 console.warn(`[WS] Client ${clientId}: truncated msg 0x${msgType.toString(16)} (${buf.byteLength}/${minSize} bytes)`);
                 return;
             }
 
-            // Rate limiting (token bucket)
+            // Rate limiting
             const info = this.clients.get(ws);
-            const rateConfig = RATE_LIMITS[msgType];
-            if (info && rateConfig) {
-                const bucket = info.rateBuckets[msgType];
-                const now = performance.now();
-                const elapsed = (now - bucket.lastRefill) / 1000;
-                bucket.tokens = Math.min(rateConfig.capacity, bucket.tokens + elapsed * rateConfig.refillPerSec);
-                bucket.lastRefill = now;
-                if (bucket.tokens < 1) {
-                    info.rateViolations++;
-                    if (info.rateViolations >= VIOLATION_KICK_THRESHOLD) {
-                        console.warn(`[WS] Client ${clientId}: rate limit exceeded, disconnecting`);
-                        try { ws.close(1008, 'Rate limit exceeded'); } catch (_) {}
-                    }
-                    return; // drop message
+            if (info) {
+                const result = info.rateLimiter.consume(msgType);
+                if (result === 'kick') {
+                    console.warn(`[WS] Client ${clientId}: rate limit exceeded, disconnecting`);
+                    try { ws.close(1008, 'Rate limit exceeded'); } catch (_) {}
+                    return;
                 }
-                bucket.tokens -= 1;
+                if (result === 'drop') return;
             }
 
             switch (msgType) {
