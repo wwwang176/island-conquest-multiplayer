@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { ServerSoldier } from './ServerSoldier.js';
 import { WeaponDefs } from '../entities/WeaponDefs.js';
 import { applyFalloff } from '../shared/DamageFalloff.js';
-import { GRAVITY, MOVE_SPEED, ACCEL, DECEL } from '../shared/constants.js';
+import { GRAVITY, MOVE_SPEED, ACCEL, DECEL, MAP_WIDTH, MAP_DEPTH } from '../shared/constants.js';
 import { KeyBit, SurfaceType } from '../shared/protocol.js';
 import { HELI_PILOT_OFFSET, HELI_PASSENGER_SLOTS } from './ServerHelicopter.js';
 
@@ -99,9 +99,17 @@ export class ServerPlayer extends ServerSoldier {
 
         this._lastProcessedTick = input.tick;
 
+        // Validate yaw/pitch — reject NaN/Infinity and clamp to valid range
+        if (!Number.isFinite(input.yaw) || !Number.isFinite(input.pitch)) return;
+        const clampedPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, input.pitch));
+        // Normalize yaw to [-PI, PI]
+        let normalizedYaw = input.yaw % (2 * Math.PI);
+        if (normalizedYaw > Math.PI) normalizedYaw -= 2 * Math.PI;
+        else if (normalizedYaw < -Math.PI) normalizedYaw += 2 * Math.PI;
+
         // Update yaw/pitch from client
-        this.yaw = input.yaw;
-        this.pitch = input.pitch;
+        this.yaw = normalizedYaw;
+        this.pitch = clampedPitch;
 
         // Update mesh rotation to match (for accurate raycasting next tick)
         if (this.upperBody) this.upperBody.rotation.y = this.yaw;
@@ -216,6 +224,12 @@ export class ServerPlayer extends ServerSoldier {
                 }
             }
         }
+
+        // Map boundary clamp
+        const halfW = MAP_WIDTH / 2;
+        const halfD = MAP_DEPTH / 2;
+        finalX = Math.max(-halfW, Math.min(halfW, finalX));
+        finalZ = Math.max(-halfD, Math.min(halfD, finalZ));
 
         // Slope check
         const newGroundY = getH(finalX, finalZ);

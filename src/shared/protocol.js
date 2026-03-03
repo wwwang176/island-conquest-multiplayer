@@ -27,6 +27,15 @@ export const MsgType = {
     SCOREBOARD_SYNC:0x19,
 };
 
+// Minimum valid buffer sizes for client→server messages
+export const MSG_MIN_SIZE = {
+    [MsgType.INPUT]:   19, // msgType(1)+tick(4)+keys(2)+mouseDX(2)+mouseDY(2)+yaw(4)+pitch(4)
+    [MsgType.JOIN]:     4, // msgType(1)+teamId(1)+weaponLen(1)+nameLen(1)
+    [MsgType.LEAVE]:    1, // msgType(1)
+    [MsgType.RESPAWN]:  2, // msgType(1)+weaponLen(1)
+    [MsgType.PING]:     9, // msgType(1)+clientTimestamp(8)
+};
+
 // ── Event Types (inside EventBatch) ──
 export const EventType = {
     FIRED:              0x01,

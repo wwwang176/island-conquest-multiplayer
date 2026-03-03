@@ -1,4 +1,4 @@
-import { TICK_RATE, TICK_INTERVAL, WIN_SCORE, MOVE_SPEED, ROUND_COUNTDOWN } from '../shared/constants.js';
+import { TICK_RATE, TICK_INTERVAL, WIN_SCORE, MOVE_SPEED, ROUND_COUNTDOWN, MAX_PLAYERS } from '../shared/constants.js';
 import { WeaponDefs } from '../entities/WeaponDefs.js';
 import {
     encodeWorldSeed, encodeSnapshot, encodeEventBatch, encodeScoreboardSync,
@@ -12,6 +12,9 @@ import { ServerGrenadeManager } from './ServerGrenadeManager.js';
 import { ServerVehicleManager } from './ServerVehicleManager.js';
 import { ServerPlayer } from './ServerPlayer.js';
 import { SpawnSystem } from '../systems/SpawnSystem.js';
+
+// Selectable primary weapons (all WeaponDefs entries that have magazineSize)
+const VALID_WEAPONS = Object.keys(WeaponDefs).filter(k => WeaponDefs[k].magazineSize);
 import { CoverSystem } from '../world/CoverSystem.js';
 import { EventBus } from '../core/EventBus.js';
 
@@ -505,6 +508,7 @@ export class ServerGame {
 
         // 7. Clear game state
         this.gameOver = false;
+        this._gameOverWinner = null;
         this._killCount = 0;
         for (const e of this.entities) {
             e._kills = 0;
@@ -611,12 +615,14 @@ export class ServerGame {
 
             if (this.scores.teamA >= WIN_SCORE) {
                 this.gameOver = true;
+                this._gameOverWinner = 'teamA';
                 this._countdownTimer = ROUND_COUNTDOWN;
                 this._lastCountdownSec = ROUND_COUNTDOWN + 1;
                 this.eventBus.emit('gameOver', { winner: 'teamA', scores: { ...this.scores } });
                 console.log(`[Game] GAME OVER — Team A wins! (${this.scores.teamA} - ${this.scores.teamB}) — restarting in ${ROUND_COUNTDOWN}s`);
             } else if (this.scores.teamB >= WIN_SCORE) {
                 this.gameOver = true;
+                this._gameOverWinner = 'teamB';
                 this._countdownTimer = ROUND_COUNTDOWN;
                 this._lastCountdownSec = ROUND_COUNTDOWN + 1;
                 this.eventBus.emit('gameOver', { winner: 'teamB', scores: { ...this.scores } });
@@ -845,6 +851,24 @@ export class ServerGame {
         const spectatorCount = this.network.getSpectatorCount();
         this.network.send(ws, encodeScoreboardSync(sbEntries, spectatorCount));
 
+        // If game is in end-of-round countdown, send GAME_OVER + current countdown
+        // so the late joiner sees the result screen immediately
+        if (this.gameOver && this._gameOverWinner) {
+            const catchUpEvents = [
+                {
+                    eventType: EventType.GAME_OVER,
+                    winner: this._gameOverWinner,
+                    scoreA: this.scores.teamA,
+                    scoreB: this.scores.teamB,
+                },
+                {
+                    eventType: EventType.ROUND_COUNTDOWN,
+                    secondsLeft: Math.max(0, Math.ceil(this._countdownTimer)),
+                },
+            ];
+            this.network.send(ws, encodeEventBatch(catchUpEvents));
+        }
+
         console.log(`[Game] Client ${clientId} connected — sent WorldSeed (seed=${this.seed.toFixed(2)})`);
     }
 
@@ -891,6 +915,18 @@ export class ServerGame {
             console.log(`[Game] Client ${clientId} already in game, ignoring join`);
             return;
         }
+
+        // Enforce MAX_PLAYERS limit
+        if (this.players.size >= MAX_PLAYERS) {
+            console.log(`[Game] Client ${clientId} rejected: server full (${this.players.size}/${MAX_PLAYERS})`);
+            if (this.network) {
+                this.network.sendToClient(clientId, encodeJoinRejected('Server is full'));
+            }
+            return;
+        }
+
+        // Validate weaponId — fall back to AR15 if invalid
+        if (!VALID_WEAPONS.includes(weaponId)) weaponId = VALID_WEAPONS[0];
 
         // ── Sanitize player name ──
         playerName = String(playerName).trim().replace(/[^\w\s\-]/g, '').substring(0, 16).trim();
@@ -1014,8 +1050,7 @@ export class ServerGame {
         if (player.alive || !player.canRespawn()) return;
 
         // Validate weaponId — fall back to AR15 if invalid
-        const validWeapons = ['AR15', 'SMG', 'LMG', 'BOLT'];
-        if (!validWeapons.includes(weaponId)) weaponId = 'AR15';
+        if (!VALID_WEAPONS.includes(weaponId)) weaponId = VALID_WEAPONS[0];
 
         // Apply new weapon
         player.weaponId = weaponId;
