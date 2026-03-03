@@ -10,8 +10,8 @@ const RAIN_COUNT = 3000;
 const RAIN_AREA = 60;        // horizontal spread around camera
 const RAIN_HEIGHT = 40;      // vertical range above camera
 const RAIN_SPEED = 37.5;     // fall speed (m/s)
-const WIND_X = 8;            // horizontal wind drift (strong storm)
-const WIND_Z = 3;
+const WIND_X = 3;            // horizontal wind drift (strong storm)
+const WIND_Z = 8;
 
 // ── Splash config ──
 const SPLASH_COUNT = 6000;
