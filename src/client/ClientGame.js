@@ -18,6 +18,12 @@ import { WeaponDefs, GunAnim } from '../entities/WeaponDefs.js';
 import { MAP_WIDTH, MAP_DEPTH, GRAVITY, MOVE_SPEED, ACCEL, DECEL, TEAM_SIZE } from '../shared/constants.js';
 import Stats from 'three/addons/libs/stats.module.js';
 
+import { ClientHUD } from './ClientHUD.js';
+import { Scoreboard } from './Scoreboard.js';
+import { JoinScreen } from './JoinScreen.js';
+import { DeathScreen } from './DeathScreen.js';
+import { GameOverScreen } from './GameOverScreen.js';
+
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
 // Reusable vectors for FPS prediction
@@ -41,11 +47,6 @@ const _headLocal   = new THREE.Vector3();
 const _normalRaycaster = new THREE.Raycaster();
 
 const PLAYER_JUMP_SPEED = 4;
-
-/** Escape HTML special characters to prevent XSS when inserting into innerHTML. */
-function escapeHTML(str) {
-    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
 
 
 /**
@@ -160,6 +161,22 @@ export class ClientGame {
         this.killFeed = new KillFeed();
         this.spectatorHUD = new SpectatorHUD();
 
+        // ── Extracted UI modules ──
+        this.hud = new ClientHUD();
+        this.scoreboard = new Scoreboard();
+        this.joinScreen = new JoinScreen();
+        this.deathScreen = new DeathScreen();
+        this.deathScreen._onRespawn = (weaponId) => {
+            this._fps.weaponId = weaponId;
+            const def = WeaponDefs[weaponId];
+            this._fps.moveSpeed = MOVE_SPEED * (def?.moveSpeedMult || 1.0);
+            this.network.sendRespawn(weaponId);
+        };
+        this.deathScreen._onSpectate = () => {
+            this._leaveGame();
+        };
+        this.gameOverScreen = new GameOverScreen();
+
         // ── Spectator camera state ──
         this._spectator = {
             mode: 'follow',
@@ -219,44 +236,26 @@ export class ClientGame {
         this._serverAmmo = 30;
         this._serverGrenades = 2;
 
-        // ── Scoreboard (Tab key) ──
-        this._scoreboard = {}; // playerName → { kills, deaths, team, weapon }
-        this._playerNames = new Map(); // entityId → playerName
-        this._spectatorCount = 0;
-        this._playerPings = {}; // playerName → ping ms
-        this._createScoreboard();
-
-        // ── HUD ──
-        this._createScoreHUD();
-        this._createCrosshair();
-        this._createScopeVignette();
-        this._createPlayerHUD();
+        // ── Vehicle HUD ──
         this._createVehicleHUD();
-        this._createDamageIndicator();
-        this._createPingDisplay();
-        this._createKillBanner();
-        this._createFlagBanner();
 
-        // Kill streak state
-        this._streakCount = 0;
-        this._streakTimer = 0;
-        // Kill banner timer
-        this._killBannerTimer = 0;
-        this._killBannerFadeOut = false;
-        // Flag banner timer
-        this._flagBannerTimer = 0;
-        this._flagBannerFadeOut = false;
-        // Previous flag states for detecting changes
+        // ── Previous flag states for detecting changes ──
         this._prevFlagStates = [];
-        this._createConnectionUI();
+
+        // ── Connection UI ──
+        this.joinScreen.createConnectionUI((url) => this.network.connect(url));
 
         // ── Key handlers ──
         document.addEventListener('keydown', (e) => this._onGlobalKey(e));
         document.addEventListener('keydown', (e) => {
-            if (e.code === 'Tab') { e.preventDefault(); this._showScoreboard(); }
+            if (e.code === 'Tab') {
+                e.preventDefault();
+                this.scoreboard.updateWeaponData(this.entityRenderer, this.scoreboard.playerNames, TEAM_SIZE);
+                this.scoreboard.show(this._fps.playerName, this._fps.myEntityId);
+            }
         });
         document.addEventListener('keyup', (e) => {
-            if (e.code === 'Tab') { e.preventDefault(); this._hideScoreboard(); }
+            if (e.code === 'Tab') { e.preventDefault(); this.scoreboard.hide(); }
         });
 
         // ── Pointer lock for FPS ──
@@ -295,83 +294,31 @@ export class ClientGame {
         };
         this.network.onPlayerJoined = (playerId, team, playerName) => {
             console.log(`[Client] Player "${playerName}" joined ${team} (entity ${playerId})`);
-            this._playerNames.set(playerId, playerName);
-            if (!this._scoreboard[playerName]) {
-                this._scoreboard[playerName] = { kills: 0, deaths: 0, team, weapon: '' };
+            this.scoreboard.playerNames.set(playerId, playerName);
+            if (!this.scoreboard.data[playerName]) {
+                this.scoreboard.data[playerName] = { kills: 0, deaths: 0, team, weapon: '' };
             }
             // Remove the AI placeholder this player replaced
             const aiName = team === 'teamA' ? `A-${playerId}` : `B-${playerId - TEAM_SIZE}`;
-            delete this._scoreboard[aiName];
+            delete this.scoreboard.data[aiName];
         };
         this.network.onPlayerLeft = (playerId) => {
             console.log(`[Client] Player entity ${playerId} left the game`);
         };
         this.network.onJoinRejected = (reason) => {
             console.log(`[Client] Join rejected: ${reason}`);
-            this._createJoinUI(reason);
+            this.joinScreen.createJoinUI((team, wpn, name) => this._joinGame(team, wpn, name), () => {}, reason);
         };
         this.network.onScoreboardSync = (entries, spectatorCount) => {
-            this._onScoreboardSync(entries, spectatorCount);
+            this.scoreboard.onSync(entries, spectatorCount);
         };
         this.network.onConnected = () => this._onConnected();
         this.network.onDisconnected = () => this._onDisconnected();
     }
 
     // ═══════════════════════════════════════════════════════
-    // Connection UI
+    // Helpers
     // ═══════════════════════════════════════════════════════
-
-    _createConnectionUI() {
-        const blocker = document.getElementById('blocker');
-        if (!blocker) return;
-        this._blocker = blocker;
-
-        blocker.innerHTML = `
-            <h1>Island Conquest</h1>
-            <p style="margin-bottom:12px">LAN Multiplayer</p>
-            <div style="display:flex;gap:8px;align-items:center">
-                <input id="server-url" type="text" value="ws://${location.hostname || 'localhost'}:${location.port || '8088'}"
-                    style="padding:8px 12px;font-size:16px;border:none;border-radius:4px;width:280px;
-                    background:rgba(255,255,255,0.9);color:#333;outline:none"
-                    placeholder="ws://192.168.1.x:8088" />
-                <button id="connect-btn"
-                    style="padding:8px 20px;font-size:16px;border:none;border-radius:4px;
-                    background:#4488ff;color:#fff;cursor:pointer;font-weight:bold">
-                    Connect
-                </button>
-            </div>
-            <p id="conn-status" style="margin-top:8px;font-size:14px;color:#aaa"></p>
-        `;
-
-        const input = document.getElementById('server-url');
-        const btn = document.getElementById('connect-btn');
-
-        const doConnect = () => {
-            const url = input.value.trim();
-            if (!url) return;
-            document.getElementById('conn-status').textContent = 'Connecting...';
-            btn.disabled = true;
-            this.network.connect(url);
-        };
-
-        btn.addEventListener('click', doConnect);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') doConnect();
-        });
-    }
-
-    /** Reset dirty-check caches so HUD refreshes on next frame. */
-    _resetHUDCache() {
-        this._lastHP = undefined;
-        this._lastAmmo = undefined;
-        this._lastWeaponId = undefined;
-        this._lastReloading = undefined;
-        this._lastBolting = undefined;
-        this._lastGrenades = undefined;
-        this._reloadTrack.wasReloading = false;
-        this._reloadTrack.wasBolting = false;
-        this._reloadTrack.elapsed = 0;
-    }
 
     /** Unscope: reset FOV, hide vignette, show crosshair + gun. */
     _unscope() {
@@ -381,136 +328,8 @@ export class ClientGame {
         this.camera.fov = 75;
         this.camera.updateProjectionMatrix();
         if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
-        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-        if (this._crosshair) this._crosshair.style.display = 'block';
-    }
-
-    /** Hide all playing-mode HUD elements. */
-    _hidePlayingHUD() {
-        this._crosshair.style.display = 'none';
-        this._healthHUD.style.display = 'none';
-        this._ammoHUD.style.display = 'none';
-        this._reloadIndicator.style.display = 'none';
-        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-    }
-
-    _createScoreHUD() {
-        const el = document.createElement('div');
-        el.id = 'net-score';
-        el.style.cssText = `position:fixed;top:15px;left:50%;transform:translateX(-50%);
-            color:white;font-family:Consolas,monospace;font-size:18px;
-            background:rgba(0,0,0,0.5);padding:8px 24px;border-radius:6px;
-            pointer-events:none;z-index:100;text-align:center;`;
-        el.innerHTML = `
-            <span style="color:#4488ff;font-weight:bold"><span id="score-a">0</span></span>
-            <span style="color:#aaa;font-size:14px;margin:0 6px">
-                Team A [<span id="flag-count-a">0</span>] &mdash; [<span id="flag-count-b">0</span>] Team B
-            </span>
-            <span style="color:#ff4444;font-weight:bold"><span id="score-b">0</span></span>`;
-        document.body.appendChild(el);
-        this._scoreA = document.getElementById('score-a');
-        this._scoreB = document.getElementById('score-b');
-        this._flagCountA = document.getElementById('flag-count-a');
-        this._flagCountB = document.getElementById('flag-count-b');
-    }
-
-    _createCrosshair() {
-        const el = document.createElement('div');
-        el.id = 'crosshair';
-        el.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-            width:30px;height:30px;pointer-events:none;z-index:100;display:none;`;
-        el.innerHTML = `
-            <svg width="30" height="30" viewBox="0 0 30 30">
-                <line x1="15" y1="3" x2="15" y2="12" stroke="white" stroke-width="2" opacity="0.8"/>
-                <line x1="15" y1="18" x2="15" y2="27" stroke="white" stroke-width="2" opacity="0.8"/>
-                <line x1="3" y1="15" x2="12" y2="15" stroke="white" stroke-width="2" opacity="0.8"/>
-                <line x1="18" y1="15" x2="27" y2="15" stroke="white" stroke-width="2" opacity="0.8"/>
-            </svg>`;
-        document.body.appendChild(el);
-        this._crosshair = el;
-
-        // Hit marker (X shape, separate from crosshair)
-        const hm = document.createElement('div');
-        hm.id = 'hit-marker';
-        hm.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(45deg);
-            width:30px;height:30px;pointer-events:none;z-index:101;display:none;`;
-        hm.innerHTML = `<svg width="30" height="30" viewBox="0 0 20 20">
-            <line x1="10" y1="2" x2="10" y2="7" stroke="white" stroke-width="1.5"/>
-            <line x1="10" y1="13" x2="10" y2="18" stroke="white" stroke-width="1.5"/>
-            <line x1="2" y1="10" x2="7" y2="10" stroke="white" stroke-width="1.5"/>
-            <line x1="13" y1="10" x2="18" y2="10" stroke="white" stroke-width="1.5"/></svg>`;
-        document.body.appendChild(hm);
-        this._hitMarker = hm;
-        this._hitMarkerLines = hm.querySelectorAll('line');
-        this._hitMarkerScale = 1;
-        this._hitMarkerDuration = 0.15;
-        this._hitMarkerTimer = 0;
-    }
-
-    _createScopeVignette() {
-        const el = document.createElement('div');
-        el.id = 'scope-vignette';
-        el.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;
-            pointer-events:none;z-index:99;display:none;
-            background:radial-gradient(circle, transparent 30%, rgba(0,0,0,0.9) 70%);`;
-        el.innerHTML = `
-            <div style="position:absolute;top:50%;left:0;width:100%;height:1px;background:rgba(255,255,255,0.5);"></div>
-            <div style="position:absolute;top:0;left:50%;width:1px;height:100%;background:rgba(255,255,255,0.5);"></div>
-            <div style="position:absolute;top:50%;left:50%;width:6px;height:6px;transform:translate(-50%,-50%);
-                border:1px solid rgba(255,255,255,0.6);border-radius:50%;"></div>`;
-        document.body.appendChild(el);
-        this._scopeVignette = el;
-    }
-
-    _createPlayerHUD() {
-        // ── Health HUD (bottom-left) ──
-        const health = document.createElement('div');
-        health.id = 'health-hud';
-        health.style.cssText = `position:fixed;bottom:30px;left:30px;color:white;
-            font-family:Consolas,monospace;background:rgba(0,0,0,0.5);
-            padding:12px 18px;border-radius:6px;pointer-events:none;z-index:100;
-            min-width:150px;display:none;`;
-        document.body.appendChild(health);
-        this._healthHUD = health;
-
-        // ── Ammo HUD (bottom-right) ──
-        const ammo = document.createElement('div');
-        ammo.id = 'ammo-hud';
-        ammo.style.cssText = `position:fixed;bottom:30px;right:30px;color:white;
-            font-family:Consolas,monospace;font-size:16px;background:rgba(0,0,0,0.5);
-            padding:12px 18px;border-radius:6px;pointer-events:none;z-index:100;
-            min-width:120px;display:none;`;
-        document.body.appendChild(ammo);
-        this._ammoHUD = ammo;
-
-        // ── Reload Indicator (center, SVG circle) ──
-        const ri = document.createElement('div');
-        ri.id = 'reload-indicator';
-        ri.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-            width:40px;height:40px;pointer-events:none;z-index:100;display:none;`;
-        ri.innerHTML = `<svg width="40" height="40" viewBox="0 0 40 40" style="transform:rotate(-90deg)">
-            <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="3"/>
-            <circle id="reload-arc" cx="20" cy="20" r="16" fill="none" stroke="white" stroke-width="3"
-                stroke-dasharray="100.53" stroke-dashoffset="100.53" stroke-linecap="round" opacity="0.85"/>
-        </svg>`;
-        document.body.appendChild(ri);
-        this._reloadIndicator = ri;
-        this._reloadArc = null; // lazy-cached
-
-        // Dirty-check caches
-        this._lastAmmo = undefined;
-        this._lastHP = undefined;
-        this._lastWeaponId = undefined;
-        this._lastReloading = undefined;
-        this._lastBolting = undefined;
-        this._lastGrenades = undefined;
-
-        // Reload progress tracking (local timer since server only sends state bits)
-        this._reloadTrack = {
-            wasReloading: false,
-            wasBolting: false,
-            elapsed: 0,
-        };
+        if (this.hud.scopeVignette) this.hud.scopeVignette.style.display = 'none';
+        if (this.hud.crosshair) this.hud.crosshair.style.display = 'block';
     }
 
     _createVehicleHUD() {
@@ -547,519 +366,6 @@ export class ClientGame {
         this._vehiclePrompt = prompt;
     }
 
-    _createDamageIndicator() {
-        const el = document.createElement('div');
-        el.id = 'damage-indicator';
-        el.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;
-            pointer-events:none;z-index:99;`;
-        document.body.appendChild(el);
-        this._dmgIndicator = el;
-        this._dmgIndicatorTimer = 0;
-    }
-
-    _showDamageDirection(dirX, dirZ, timer) {
-        if (!this._dmgIndicator) return;
-        const attackAngle = Math.atan2(dirX, -dirZ);
-        const relAngle = attackAngle - this._fps.yaw;
-        const gradAngle = (-relAngle * 180 / Math.PI + 90);
-        const opacity = Math.min(1, timer) * 0.6;
-
-        this._dmgIndicator.style.background = `linear-gradient(${gradAngle}deg,
-            rgba(255,0,0,${opacity}) 0%, transparent 30%, transparent 100%)`;
-        this._dmgIndicator.style.opacity = '1';
-        this._dmgIndicatorTimer = timer;
-    }
-
-    _updateDamageIndicator(dt) {
-        if (this._dmgIndicatorTimer > 0) {
-            this._dmgIndicatorTimer -= dt;
-            if (this._dmgIndicatorTimer <= 0) {
-                this._dmgIndicator.style.background = 'none';
-            }
-        }
-    }
-
-    _createPingDisplay() {
-        const el = document.createElement('div');
-        el.id = 'ping-display';
-        el.style.cssText = `position:fixed;top:10px;right:10px;
-            font-family:Consolas,monospace;font-size:12px;
-            color:rgba(255,255,255,0.5);z-index:100;pointer-events:none;`;
-        el.textContent = 'PING: --';
-        document.body.appendChild(el);
-        this._pingDisplay = el;
-    }
-
-    _createKillBanner() {
-        const el = document.createElement('div');
-        el.id = 'kill-banner';
-        el.style.cssText = `position:fixed;top:calc(50% + 60px);left:50%;transform:translateX(-50%);
-            pointer-events:none;z-index:102;display:none;
-            font-family:Arial,sans-serif;font-size:18px;font-weight:bold;
-            text-shadow:0 0 6px rgba(0,0,0,0.8);letter-spacing:2px;
-            transition:opacity 0.15s ease-out, transform 0.15s ease-out;`;
-        const span = document.createElement('span');
-        el.appendChild(span);
-        document.body.appendChild(el);
-        this._killBannerEl = el;
-        this._killBannerText = span;
-    }
-
-    _createFlagBanner() {
-        const el = document.createElement('div');
-        el.id = 'flag-banner';
-        el.style.cssText = `position:fixed;top:25%;left:50%;transform:translateX(-50%);
-            pointer-events:none;z-index:102;display:none;
-            font-family:Consolas,monospace;font-size:20px;font-weight:bold;
-            letter-spacing:2px;background:rgba(0,0,0,0.5);padding:8px 24px;border-radius:6px;
-            transition:opacity 0.15s ease-out, transform 0.15s ease-out;`;
-        const span = document.createElement('span');
-        el.appendChild(span);
-        document.body.appendChild(el);
-        this._flagBannerEl = el;
-        this._flagBannerTextEl = span;
-    }
-
-    _recordKill(isHeadshot) {
-        this._streakCount++;
-        this._streakTimer = 4;
-
-        let text, color, isStreak;
-        if (this._streakCount >= 2) {
-            const labels = ['', '', 'DOUBLE KILL', 'TRIPLE KILL', 'MULTI KILL', 'RAMPAGE'];
-            text = this._streakCount >= labels.length
-                ? 'RAMPAGE' : labels[this._streakCount];
-            color = '#ffd700';
-            isStreak = true;
-        } else {
-            text = isHeadshot ? 'HEADSHOT' : 'ELIMINATED';
-            color = isHeadshot ? '#ffd700' : '#ffffff';
-            isStreak = false;
-        }
-
-        this._killBannerText.textContent = text;
-        this._killBannerText.style.color = color;
-        this._killBannerTimer = isStreak ? 2 : 1.5;
-        this._killBannerFadeOut = false;
-
-        if (isStreak) {
-            this._killBannerEl.style.transition = 'transform 0.2s cubic-bezier(0.34,1.56,0.64,1), opacity 0.15s ease-out';
-            this._killBannerEl.style.fontSize = '28px';
-            this._killBannerEl.style.display = 'block';
-            this._killBannerEl.style.opacity = '1';
-            this._killBannerEl.style.transform = 'translateX(-50%) scale(0.5)';
-            this._killBannerEl.offsetHeight; // reflow
-            this._killBannerEl.style.transform = 'translateX(-50%) scale(1)';
-        } else {
-            this._killBannerEl.style.transition = 'opacity 0.15s ease-out, transform 0.15s ease-out';
-            this._killBannerEl.style.fontSize = '18px';
-            this._killBannerEl.style.display = 'block';
-            this._killBannerEl.style.opacity = '0';
-            this._killBannerEl.style.transform = 'translateX(-50%) translateY(8px)';
-            this._killBannerEl.offsetHeight; // reflow
-            this._killBannerEl.style.opacity = '1';
-            this._killBannerEl.style.transform = 'translateX(-50%) translateY(0)';
-        }
-    }
-
-    _showFlagBanner(text, color) {
-        this._flagBannerTextEl.textContent = text;
-        this._flagBannerTextEl.style.color = color;
-        this._flagBannerTimer = 2.0;
-        this._flagBannerFadeOut = false;
-
-        this._flagBannerEl.style.transition = 'opacity 0.15s ease-out, transform 0.15s ease-out';
-        this._flagBannerEl.style.display = 'block';
-        this._flagBannerEl.style.opacity = '0';
-        this._flagBannerEl.style.transform = 'translateX(-50%) translateY(-8px)';
-        this._flagBannerEl.offsetHeight; // reflow
-        this._flagBannerEl.style.opacity = '1';
-        this._flagBannerEl.style.transform = 'translateX(-50%) translateY(0)';
-    }
-
-    _updateKillBannerTimer(dt) {
-        // Streak window countdown
-        if (this._streakTimer > 0) {
-            this._streakTimer -= dt;
-            if (this._streakTimer <= 0) {
-                this._streakCount = 0;
-            }
-        }
-        if (this._killBannerTimer <= 0) return;
-        this._killBannerTimer -= dt;
-        if (this._killBannerTimer <= 0.3 && !this._killBannerFadeOut) {
-            this._killBannerFadeOut = true;
-            this._killBannerEl.style.opacity = '0';
-            this._killBannerEl.style.transform = 'translateX(-50%) translateY(-8px)';
-        }
-        if (this._killBannerTimer <= 0) {
-            this._killBannerEl.style.display = 'none';
-            this._killBannerTimer = 0;
-        }
-    }
-
-    _updateFlagBannerTimer(dt) {
-        if (this._flagBannerTimer <= 0) return;
-        this._flagBannerTimer -= dt;
-        if (this._flagBannerTimer <= 0.3 && !this._flagBannerFadeOut) {
-            this._flagBannerFadeOut = true;
-            this._flagBannerEl.style.opacity = '0';
-            this._flagBannerEl.style.transform = 'translateX(-50%) translateY(-8px)';
-        }
-        if (this._flagBannerTimer <= 0) {
-            this._flagBannerEl.style.display = 'none';
-            this._flagBannerTimer = 0;
-        }
-    }
-
-    _createScoreboard() {
-        const el = document.createElement('div');
-        el.id = 'scoreboard';
-        el.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-            background:rgba(0,0,0,0.8);border-radius:10px;padding:20px 28px;
-            display:none;flex-direction:column;
-            pointer-events:none;z-index:150;font-family:Consolas,monospace;
-            min-width:600px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.1);`;
-        el.innerHTML = `
-            <div style="display:flex;align-items:flex-start;gap:32px;">
-                <div id="sb-teamA" style="flex:1;min-width:280px;"></div>
-                <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;"></div>
-                <div id="sb-teamB" style="flex:1;min-width:280px;"></div>
-            </div>
-            <div id="sb-spectators" style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);display:none;"></div>`;
-        document.body.appendChild(el);
-        this._scoreboardEl = el;
-    }
-
-    /** Returns true if the scoreboard name belongs to a COM (not a real player). */
-    _isCOM(name) {
-        for (const pn of this._playerNames.values()) {
-            if (pn === name) return false;
-        }
-        return true;
-    }
-
-    _showScoreboard() {
-        if (!this._scoreboardEl) return;
-
-        this._updateScoreboardData();
-
-        // Split into teams and sort
-        const teamAList = [];
-        const teamBList = [];
-        for (const [name, stat] of Object.entries(this._scoreboard)) {
-            const entry = { name, ...stat, ping: this._playerPings[name] ?? 0 };
-            if (stat.team === 'teamA') teamAList.push(entry);
-            else teamBList.push(entry);
-        }
-        teamAList.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-        teamBList.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-
-        const localName = this._fps.playerName;
-
-        const pingColor = (ms) => ms < 30 ? '#6f6' : ms < 80 ? '#ff4' : '#f66';
-
-        const renderTeam = (entries, teamColor, teamLabel) => {
-            let totalK = 0, totalD = 0;
-            for (const e of entries) { totalK += e.kills; totalD += e.deaths; }
-            let html = `<div style="color:${teamColor};font-weight:bold;font-size:16px;margin-bottom:8px;text-align:center;">${teamLabel}</div>`;
-            html += `<div style="display:flex;color:#888;font-size:11px;padding:2px 6px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:2px;">
-                <span style="flex:1">Name</span><span style="width:30px;text-align:center">K</span>
-                <span style="width:30px;text-align:center">D</span><span style="width:50px;text-align:center">Wpn</span><span style="width:48px;text-align:right">Ping</span></div>`;
-            for (const e of entries) {
-                const isPlayer = e.name === localName && this._fps.myEntityId >= 0;
-                const com = this._isCOM(e.name);
-                const displayName = com ? `${escapeHTML(e.name)}<span style="color:#666;font-weight:normal">(AI)</span>` : escapeHTML(e.name);
-                const bg = isPlayer ? 'rgba(255,255,255,0.1)' : 'transparent';
-                const nameColor = isPlayer ? '#fff' : 'rgba(255,255,255,0.75)';
-                const wpn = e.weapon || '-';
-                const pingStr = com ? '<span style="color:#555">-</span>' : `<span style="color:${pingColor(e.ping)}">${e.ping}ms</span>`;
-                html += `<div style="display:flex;font-size:12px;padding:2px 6px;background:${bg};border-radius:2px;">
-                    <span style="flex:1;color:${nameColor};font-weight:${isPlayer ? 'bold' : 'normal'}">${displayName}</span>
-                    <span style="width:30px;text-align:center;color:#ccc">${e.kills}</span>
-                    <span style="width:30px;text-align:center;color:#ccc">${e.deaths}</span>
-                    <span style="width:50px;text-align:center;color:#888;font-size:11px">${escapeHTML(wpn)}</span>
-                    <span style="width:48px;text-align:right;font-size:11px">${pingStr}</span></div>`;
-            }
-            html += `<div style="display:flex;font-size:12px;padding:4px 6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.1);color:#aaa;">
-                <span style="flex:1;font-weight:bold">Total</span>
-                <span style="width:30px;text-align:center">${totalK}</span>
-                <span style="width:30px;text-align:center">${totalD}</span>
-                <span style="width:50px"></span><span style="width:48px"></span></div>`;
-            return html;
-        };
-
-        document.getElementById('sb-teamA').innerHTML = renderTeam(teamAList, '#4488ff', 'TEAM A');
-        document.getElementById('sb-teamB').innerHTML = renderTeam(teamBList, '#ff4444', 'TEAM B');
-
-        // Spectators section
-        const specEl = document.getElementById('sb-spectators');
-        if (specEl) {
-            if (this._spectatorCount > 0) {
-                specEl.innerHTML = `<span style="color:#888;font-size:11px;">Spectators: ${this._spectatorCount}</span>`;
-                specEl.style.display = 'block';
-            } else {
-                specEl.style.display = 'none';
-            }
-        }
-
-        this._scoreboardEl.style.display = 'flex';
-    }
-
-    _hideScoreboard() {
-        if (this._scoreboardEl) this._scoreboardEl.style.display = 'none';
-    }
-
-    _trackKill(killerName, killerTeam, victimName, victimTeam, weapon, killerKills, victimDeaths) {
-        // Track killer — use authoritative server value
-        if (!this._scoreboard[killerName]) {
-            this._scoreboard[killerName] = { kills: 0, deaths: 0, team: killerTeam, weapon: '' };
-        }
-        if (killerKills !== undefined) {
-            this._scoreboard[killerName].kills = killerKills;
-        } else {
-            this._scoreboard[killerName].kills++;
-        }
-        this._scoreboard[killerName].team = killerTeam;
-        if (weapon) this._scoreboard[killerName].weapon = weapon;
-
-        // Track victim — use authoritative server value
-        if (!this._scoreboard[victimName]) {
-            this._scoreboard[victimName] = { kills: 0, deaths: 0, team: victimTeam, weapon: '' };
-        }
-        if (victimDeaths !== undefined) {
-            this._scoreboard[victimName].deaths = victimDeaths;
-        } else {
-            this._scoreboard[victimName].deaths++;
-        }
-        this._scoreboard[victimName].team = victimTeam;
-    }
-
-    _onScoreboardSync(entries, spectatorCount) {
-        for (const e of entries) {
-            this._scoreboard[e.name] = {
-                kills: e.kills,
-                deaths: e.deaths,
-                team: e.team,
-                weapon: e.weaponId,
-            };
-            if (e.ping !== undefined) {
-                this._playerPings[e.name] = e.ping;
-            }
-        }
-        if (spectatorCount !== undefined) {
-            this._spectatorCount = spectatorCount;
-        }
-    }
-
-    _createJoinUI(errorMsg = '') {
-        // Remove existing join panel if any
-        const existing = document.getElementById('join-panel');
-        if (existing) existing.remove();
-        if (this._joinKeyHandler) {
-            document.removeEventListener('keydown', this._joinKeyHandler);
-            this._joinKeyHandler = null;
-        }
-
-        this._joinStep = 1;
-
-        const panel = document.createElement('div');
-        panel.id = 'join-panel';
-        panel.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;
-            background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;
-            flex-direction:column;z-index:200;font-family:Arial,sans-serif;`;
-
-        panel.innerHTML = `
-            <div id="join-step1" style="display:flex;flex-direction:column;align-items:center;">
-                <h2 style="color:#fff;font-size:36px;margin-bottom:24px">JOIN GAME</h2>
-                <div style="display:flex;gap:8px;align-items:center;margin-bottom:20px">
-                    <label style="color:#aaa;font-size:14px">Name:</label>
-                    <input id="player-name" type="text" value="Player" maxlength="16"
-                        style="padding:6px 10px;font-size:14px;border:none;border-radius:4px;width:160px;
-                        background:rgba(255,255,255,0.9);color:#333;outline:none" />
-                </div>
-                <p id="join-error" style="color:#ff4444;font-size:14px;margin-top:4px;min-height:18px;font-weight:bold">${errorMsg}</p>
-                <div style="font-size:14px;color:#aaa;margin-bottom:12px;">Select team:</div>
-                <div style="display:flex;gap:16px;margin-bottom:20px">
-                    <button class="team-btn" data-team="teamA"
-                        style="padding:12px 32px;font-size:18px;border:2px solid #4488ff;border-radius:6px;
-                        background:rgba(68,136,255,0.2);color:#4488ff;cursor:pointer;font-weight:bold">
-                        BLUE TEAM
-                    </button>
-                    <button class="team-btn" data-team="teamB"
-                        style="padding:12px 32px;font-size:18px;border:2px solid #ff4444;border-radius:6px;
-                        background:rgba(255,68,68,0.2);color:#ff4444;cursor:pointer;font-weight:bold">
-                        RED TEAM
-                    </button>
-                </div>
-                <button id="join-cancel" style="margin-top:12px;padding:6px 20px;font-size:13px;
-                    border:1px solid #666;border-radius:4px;background:transparent;color:#888;cursor:pointer">
-                    Cancel (Esc)
-                </button>
-            </div>
-            <div id="join-step2" style="display:none;flex-direction:column;align-items:center;">
-                <h2 style="color:#fff;font-size:36px;margin-bottom:12px">SELECT WEAPON</h2>
-                <div id="join-team-badge" style="font-size:14px;font-weight:bold;margin-bottom:18px;
-                    padding:4px 16px;border-radius:4px;"></div>
-                <div style="display:flex;gap:12px;margin-bottom:20px;color:#fff;">
-                    ${this._weaponCardHTML('join-wp', 1, 'AR15', 'ar', true)}
-                    ${this._weaponCardHTML('join-wp', 2, 'SMG', 'smg', false)}
-                    ${this._weaponCardHTML('join-wp', 3, 'LMG', 'lmg', false)}
-                    ${this._weaponCardHTML('join-wp', 4, 'BOLT', 'bolt', false)}
-                </div>
-                <div style="display:flex;gap:12px;margin-top:16px;">
-                    <button id="join-back-btn" style="padding:8px 24px;font-size:14px;border:1px solid #666;
-                        border-radius:4px;background:transparent;color:#aaa;cursor:pointer">Back (Esc)</button>
-                    <button id="join-deploy-btn" style="padding:8px 32px;font-size:16px;font-weight:bold;
-                        border:2px solid #4488ff;border-radius:4px;background:rgba(68,136,255,0.3);
-                        color:#fff;cursor:pointer">DEPLOY (Space)</button>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(panel);
-
-        let selectedWeapon = 'AR15';
-
-        const highlightJoinWeapon = (weaponId) => {
-            selectedWeapon = weaponId;
-            const map = { AR15: 'ar', SMG: 'smg', LMG: 'lmg', BOLT: 'bolt' };
-            for (const [wid, shortId] of Object.entries(map)) {
-                const card = document.getElementById(`join-wp-${shortId}`);
-                if (!card) continue;
-                if (wid === weaponId) {
-                    card.style.borderColor = '#4488ff';
-                    card.style.background = 'rgba(68,136,255,0.15)';
-                } else {
-                    card.style.borderColor = '#888';
-                    card.style.background = 'transparent';
-                }
-            }
-        };
-
-        // Weapon card click selection
-        const weaponMap = { 'join-wp-ar': 'AR15', 'join-wp-smg': 'SMG', 'join-wp-lmg': 'LMG', 'join-wp-bolt': 'BOLT' };
-        for (const [elId, wid] of Object.entries(weaponMap)) {
-            const card = document.getElementById(elId);
-            if (card) card.addEventListener('click', () => highlightJoinWeapon(wid));
-        }
-
-        // Deploy action (shared by button click and Space key)
-        const deployAction = () => {
-            document.removeEventListener('keydown', this._joinKeyHandler);
-            this._joinKeyHandler = null;
-            panel.remove();
-            this._joinGame(this._joinTeam, selectedWeapon, this._joinName);
-        };
-
-        // Back action (shared by button click and Esc key)
-        const backAction = () => {
-            this._joinStep = 1;
-            document.getElementById('join-step2').style.display = 'none';
-            document.getElementById('join-step1').style.display = 'flex';
-        };
-
-        // Deploy button
-        document.getElementById('join-deploy-btn').addEventListener('click', deployAction);
-
-        // Back button
-        document.getElementById('join-back-btn').addEventListener('click', backAction);
-
-        // Keyboard handler — weapon selection (Digit1-4) + deploy (Space) + back (Esc) in step 2
-        this._joinKeyHandler = (e) => {
-            if (this._joinStep !== 2) return;
-            const weaponKeys = { Digit1: 'AR15', Digit2: 'SMG', Digit3: 'LMG', Digit4: 'BOLT' };
-            if (weaponKeys[e.code]) {
-                highlightJoinWeapon(weaponKeys[e.code]);
-            }
-            if (e.code === 'Space') {
-                deployAction();
-            }
-            // Escape is handled by the global keydown handler (avoids double-fire)
-        };
-        document.addEventListener('keydown', this._joinKeyHandler);
-
-        // Team selection → advance to step 2
-        panel.querySelectorAll('.team-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                this._joinTeam = btn.dataset.team;
-                this._joinName = document.getElementById('player-name').value.trim() || 'Player';
-                this._joinStep = 2;
-
-                // Show team badge
-                const badge = document.getElementById('join-team-badge');
-                if (badge) {
-                    const isA = this._joinTeam === 'teamA';
-                    badge.textContent = isA ? 'BLUE TEAM' : 'RED TEAM';
-                    badge.style.color = isA ? '#4488ff' : '#ff4444';
-                    badge.style.border = `1px solid ${isA ? '#4488ff' : '#ff4444'}`;
-                    badge.style.background = isA ? 'rgba(68,136,255,0.15)' : 'rgba(255,68,68,0.15)';
-                }
-
-                document.getElementById('join-step1').style.display = 'none';
-                document.getElementById('join-step2').style.display = 'flex';
-            });
-        });
-
-        // Cancel
-        const cancelBtn = document.getElementById('join-cancel');
-        cancelBtn.addEventListener('click', () => {
-            if (this._joinKeyHandler) {
-                document.removeEventListener('keydown', this._joinKeyHandler);
-                this._joinKeyHandler = null;
-            }
-            panel.remove();
-        });
-    }
-
-    // ── Weapon card helpers (mirrored from HUDController) ──
-
-    _weaponStatBars(weaponId) {
-        const def = WeaponDefs[weaponId];
-        let maxDmg = 0, maxRof = 0, maxRng = 0, maxSpread = 0, maxMob = 0;
-        for (const k in WeaponDefs) {
-            const w = WeaponDefs[k];
-            if (!w.fireRate) continue;
-            if (w.damage > maxDmg) maxDmg = w.damage;
-            if (w.fireRate > maxRof) maxRof = w.fireRate;
-            if (w.maxRange > maxRng) maxRng = w.maxRange;
-            if (w.baseSpread > maxSpread) maxSpread = w.baseSpread;
-            if ((w.moveSpeedMult || 1) > maxMob) maxMob = w.moveSpeedMult || 1;
-        }
-        const stats = [
-            ['DMG', def.damage / maxDmg],
-            ['ROF', def.fireRate / maxRof],
-            ['RNG', def.maxRange / maxRng],
-            ['ACC', 1 - def.baseSpread / (maxSpread * 1.25)],
-            ['MOB', (def.moveSpeedMult || 1) / maxMob],
-        ];
-        const barW = 64;
-        return stats.map(([label, ratio]) => {
-            const pct = Math.round(Math.min(1, Math.max(0, ratio)) * 100);
-            return `<div style="display:flex;align-items:center;gap:5px;margin-top:3px;">
-                <span style="font-size:9px;color:#888;width:24px;text-align:right;">${label}</span>
-                <div style="width:${barW}px;height:5px;background:rgba(255,255,255,0.12);border-radius:2px;overflow:hidden;">
-                    <div style="width:${pct}%;height:100%;background:rgba(255,255,255,0.6);border-radius:2px;"></div>
-                </div>
-                <span style="font-size:9px;color:#aaa;width:20px;text-align:right;">${pct}</span>
-            </div>`;
-        }).join('');
-    }
-
-    _weaponCardHTML(idPrefix, num, weaponId, shortId, selected) {
-        const def = WeaponDefs[weaponId];
-        const border = selected ? '#4488ff' : '#888';
-        const bg = selected ? 'rgba(68,136,255,0.15)' : 'transparent';
-        return `<div id="${idPrefix}-${shortId}" style="border:2px solid ${border};border-radius:8px;padding:10px 14px;
-            background:${bg};cursor:pointer;min-width:140px;transition:background 0.15s,border-color 0.15s;"
-            onmouseenter="if(this.style.borderColor!=='rgb(68, 136, 255)')this.style.background='rgba(255,255,255,0.07)'"
-            onmouseleave="if(this.style.borderColor!=='rgb(68, 136, 255)')this.style.background='transparent'">
-            <div style="font-size:16px;font-weight:bold;">[${num}] ${def.name}</div>
-            <div style="font-size:11px;color:#aaa;margin-top:3px;">${def.fireRate} RPM &middot; ${def.magazineSize} rds</div>
-            ${this._weaponStatBars(weaponId)}
-        </div>`;
-    }
-
     _joinGame(team, weaponId, playerName) {
         // Sanitize locally — must match server-side sanitization in ServerGame.onJoinRequest
         playerName = String(playerName).trim().replace(/[^\w\s\-]/g, '').substring(0, 16).trim() || 'Player';
@@ -1072,8 +378,7 @@ export class ClientGame {
         this._fps.moveSpeed = MOVE_SPEED * (def?.moveSpeedMult || 1.0);
 
         // Force ammo HUD refresh on next frame
-        this._lastAmmo = undefined;
-        this._lastWeaponId = undefined;
+        this.hud.resetCache();
 
         this.network.sendJoin(team, weaponId, playerName);
         console.log(`[Client] Joining ${team} with ${weaponId} as "${playerName}"`);
@@ -1159,7 +464,7 @@ export class ClientGame {
 
     _onConnected() {
         console.log('[Client] Connected to server');
-        document.getElementById('conn-status').textContent = 'Connected! Waiting for world data...';
+        this.joinScreen.showConnected();
 
         // Periodic ping measurement
         this._pingInterval = setInterval(() => {
@@ -1181,13 +486,9 @@ export class ClientGame {
             fps.fpMuzzleFlash = null;
         }
         this._unscope();
-        this._hidePlayingHUD();
+        this.hud.hidePlayingHUD();
         if (this._pingInterval) clearInterval(this._pingInterval);
-        if (this._blocker) {
-            this._blocker.classList.remove('hidden');
-            document.getElementById('conn-status').textContent = 'Disconnected. Reconnect?';
-            document.getElementById('connect-btn').disabled = false;
-        }
+        this.joinScreen.showDisconnected();
     }
 
     _onWorldSeed(seed, flagLayout, entityCount, timeOfDay) {
@@ -1197,12 +498,13 @@ export class ClientGame {
 
         // Prefill all AI soldiers into scoreboard
         for (let i = 0; i < TEAM_SIZE; i++) {
-            this._scoreboard[`A-${i}`] = { kills: 0, deaths: 0, team: 'teamA', weapon: '' };
-            this._scoreboard[`B-${i}`] = { kills: 0, deaths: 0, team: 'teamB', weapon: '' };
+            this.scoreboard.data[`A-${i}`] = { kills: 0, deaths: 0, team: 'teamA', weapon: '' };
+            this.scoreboard.data[`B-${i}`] = { kills: 0, deaths: 0, team: 'teamB', weapon: '' };
         }
 
         // Hide connection UI
-        if (this._blocker) this._blocker.classList.add('hidden');
+        const blocker = document.getElementById('blocker');
+        if (blocker) blocker.classList.add('hidden');
 
         // Build a real cannon-es world for ragdoll physics
         // Island static bodies (terrain heightfield + obstacles) auto-register via addBody
@@ -1285,16 +587,16 @@ export class ClientGame {
 
         // Register local player in scoreboard (server doesn't send PLAYER_JOINED to self)
         const pName = this._fps.playerName;
-        this._playerNames.set(playerId, pName);
-        if (!this._scoreboard[pName]) {
-            this._scoreboard[pName] = { kills: 0, deaths: 0, team, weapon: weaponId };
+        this.scoreboard.playerNames.set(playerId, pName);
+        if (!this.scoreboard.data[pName]) {
+            this.scoreboard.data[pName] = { kills: 0, deaths: 0, team, weapon: weaponId };
         } else {
-            this._scoreboard[pName].team = team;
-            this._scoreboard[pName].weapon = weaponId;
+            this.scoreboard.data[pName].team = team;
+            this.scoreboard.data[pName].weapon = weaponId;
         }
         // Remove the AI placeholder this player replaced (e.g. A-3)
         const aiName = team === 'teamA' ? `A-${playerId}` : `B-${playerId - TEAM_SIZE}`;
-        delete this._scoreboard[aiName];
+        delete this.scoreboard.data[aiName];
 
         const fps = this._fps;
         fps.myEntityId = playerId;
@@ -1338,18 +640,18 @@ export class ClientGame {
         this.camera.updateProjectionMatrix();
 
         // Hide scope vignette
-        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
+        if (this.hud.scopeVignette) this.hud.scopeVignette.style.display = 'none';
 
         // Switch to FPS mode
         this.gameMode = 'playing';
         this.spectatorHUD.hide();
-        this._crosshair.style.display = 'block';
-        this._healthHUD.style.display = 'block';
-        this._ammoHUD.style.display = 'block';
-        this._hideDeathOverlay();
+        this.hud.crosshair.style.display = 'block';
+        this.hud.healthHUD.style.display = 'block';
+        this.hud.ammoHUD.style.display = 'block';
+        this.deathScreen.hide();
 
         // Initialize health + ammo HUD content
-        this._resetHUDCache();
+        this.hud.resetCache();
 
         // Request pointer lock
         this.input.requestPointerLock();
@@ -1373,7 +675,7 @@ export class ClientGame {
             // Exited vehicle — restore FP gun (skip if dead, death hides gun)
             if (this.gameMode !== 'dead') {
                 if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
-                if (this._crosshair) this._crosshair.style.display = 'block';
+                if (this.hud.crosshair) this.hud.crosshair.style.display = 'block';
             }
         }
 
@@ -1399,7 +701,7 @@ export class ClientGame {
 
         // Damage direction indicator
         if (dmgTimer > 0) {
-            this._showDamageDirection(dmgDirX, dmgDirZ, dmgTimer);
+            this.hud.showDamageDirection(dmgDirX, dmgDirZ, dmgTimer, this._fps.yaw);
         }
     }
 
@@ -1429,20 +731,21 @@ export class ClientGame {
                     this._unscope();
                     if (fps.fpGunGroup) fps.fpGunGroup.visible = false;
                     this.gameMode = 'dead';
-                    this._streakCount = 0;
-                    this._streakTimer = 0;
-                    this._showDeathOverlay();
+                    this.hud._streakCount = 0;
+                    this.hud._streakTimer = 0;
+                    this.deathScreen.show(this._fps.weaponId);
+                    this.hud.hidePlayingHUD();
                     document.exitPointerLock();
                 } else if (this.gameMode === 'dead' && alive) {
                     // Respawned (fallback if PLAYER_SPAWNED was missed)
                     this.gameMode = 'playing';
-                    this._hideDeathOverlay();
-                    this._crosshair.style.display = 'block';
-                    this._healthHUD.style.display = 'block';
-                    this._ammoHUD.style.display = 'block';
+                    this.deathScreen.hide();
+                    this.hud.crosshair.style.display = 'block';
+                    this.hud.healthHUD.style.display = 'block';
+                    this.hud.ammoHUD.style.display = 'block';
                     if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
                     fps.deathLerp.active = false;
-                    this._resetHUDCache();
+                    this.hud.resetCache();
                     this.input.requestPointerLock();
                 }
 
@@ -1477,9 +780,9 @@ export class ClientGame {
                 if (contesting !== prev.contesting) {
                     const teamColor = myTeam === 'teamA' ? '#4488ff' : '#ff4444';
                     if (contesting === 'losing') {
-                        this._showFlagBanner(`LOSING ${flagNames[i]}`, '#ffaa00');
+                        this.hud.showFlagBanner(`LOSING ${flagNames[i]}`, '#ffaa00');
                     } else if (contesting === 'capturing') {
-                        this._showFlagBanner(`TAKING ${flagNames[i]}`, teamColor);
+                        this.hud.showFlagBanner(`TAKING ${flagNames[i]}`, teamColor);
                     }
                 }
                 prev.owner = owner;
@@ -1500,8 +803,6 @@ export class ClientGame {
         // Update scores + flag count
         this.scores.teamA = scores.teamA;
         this.scores.teamB = scores.teamB;
-        if (this._scoreA) this._scoreA.textContent = scores.teamA;
-        if (this._scoreB) this._scoreB.textContent = scores.teamB;
 
         // Count flags per team
         let flagsA = 0, flagsB = 0;
@@ -1509,8 +810,7 @@ export class ClientGame {
             if (f.owner === 'teamA') flagsA++;
             else if (f.owner === 'teamB') flagsB++;
         }
-        if (this._flagCountA) this._flagCountA.textContent = flagsA;
-        if (this._flagCountB) this._flagCountB.textContent = flagsB;
+        this.hud.updateScores(scores.teamA, scores.teamB, flagsA, flagsB);
     }
 
     _onEvents(events) {
@@ -1525,22 +825,23 @@ export class ClientGame {
                         ev.killerName, ev.killerTeam,
                         ev.victimName, ev.victimTeam,
                         ev.headshot, ev.weaponId,
-                        this._isCOM(ev.killerName),
-                        this._isCOM(ev.victimName)
+                        this.scoreboard.isCOM(ev.killerName),
+                        this.scoreboard.isCOM(ev.victimName)
                     );
-                    this._trackKill(ev.killerName, ev.killerTeam, ev.victimName, ev.victimTeam, ev.weaponId, ev.killerKills, ev.victimDeaths);
-                    if (this._scoreboardEl && this._scoreboardEl.style.display !== 'none') {
-                        this._showScoreboard();
+                    this.scoreboard.trackKill(ev.killerName, ev.killerTeam, ev.victimName, ev.victimTeam, ev.weaponId, ev.killerKills, ev.victimDeaths);
+                    if (this.scoreboard._el && this.scoreboard._el.style.display !== 'none') {
+                        this.scoreboard.updateWeaponData(this.entityRenderer, this.scoreboard.playerNames, TEAM_SIZE);
+                        this.scoreboard.show(this._fps.playerName, this._fps.myEntityId);
                     }
                     // Kill banner + hit marker upgrade for local player
                     if (ev.killerName === this._fps.playerName && this._fps.myEntityId >= 0) {
-                        this._showHitMarker(ev.headshot ? 'headshot_kill' : 'kill');
-                        this._recordKill(ev.headshot);
+                        this.hud.showHitMarker(ev.headshot ? 'headshot_kill' : 'kill');
+                        this.hud.recordKill(ev.headshot);
                     }
                     // Kill hit marker upgrade for spectated COM
                     if (this.gameMode === 'spectator' && this._spectator.mode === 'follow'
                         && this._spectator.targetId !== null && ev.killerEntityId === this._spectator.targetId) {
-                        this._showHitMarker(ev.headshot ? 'headshot_kill' : 'kill');
+                        this.hud.showHitMarker(ev.headshot ? 'headshot_kill' : 'kill');
                     }
                     // Death camera — lerp toward killer
                     if (ev.victimEntityId === this._fps.myEntityId && ev.killerEntityId !== 0xFFFF) {
@@ -1564,9 +865,9 @@ export class ClientGame {
                     if (myTeam) {
                         const teamColor = myTeam === 'teamA' ? '#4488ff' : '#ff4444';
                         if (ev.newOwner === myTeam) {
-                            this._showFlagBanner(`CAPTURED ${fname}`, teamColor);
+                            this.hud.showFlagBanner(`CAPTURED ${fname}`, teamColor);
                         } else {
-                            this._showFlagBanner(`LOST ${fname}`, '#ff4444');
+                            this.hud.showFlagBanner(`LOST ${fname}`, '#ff4444');
                         }
                     }
                     break;
@@ -1601,7 +902,7 @@ export class ClientGame {
                     break;
 
                 case EventType.ROUND_COUNTDOWN:
-                    this._updateGameOverCountdown(ev.secondsLeft);
+                    this.gameOverScreen.updateCountdown(ev.secondsLeft);
                     break;
 
                 case EventType.ROUND_RESTART:
@@ -1655,7 +956,7 @@ export class ClientGame {
         const isSpectatedShot = this.gameMode === 'spectator' && this._spectator.mode === 'follow'
             && this._spectator.targetId !== null && ev.shooterId === this._spectator.targetId;
         if ((isMyShot || isSpectatedShot) && (ev.surfaceType === SurfaceType.CHARACTER || ev.surfaceType === SurfaceType.VEHICLE)) {
-            this._showHitMarker('hit');
+            this.hud.showHitMarker('hit');
         }
 
         // Record CHARACTER hits for ragdoll impulse direction
@@ -1697,181 +998,36 @@ export class ClientGame {
         }
     }
 
-    _showHitMarker(type = 'hit') {
-        const color = type === 'headshot_kill' ? '#ffd700'
-            : type === 'kill' ? '#ff4444' : '#ffffff';
-        this._hitMarkerDuration = type === 'headshot_kill' ? 0.35
-            : type === 'kill' ? 0.30 : 0.15;
-        this._hitMarkerTimer = this._hitMarkerDuration;
-
-        for (const line of this._hitMarkerLines) {
-            line.setAttribute('stroke', color);
-        }
-        this._hitMarkerScale = (type === 'kill' || type === 'headshot_kill') ? 1.6 : 1;
-
-        this._hitMarker.style.display = 'block';
-        this._hitMarker.style.opacity = '1';
-        this._hitMarker.style.transform = `translate(-50%,-50%) rotate(45deg) scale(${this._hitMarkerScale})`;
-    }
-
-    _updateHitMarker(dt) {
-        if (this._hitMarkerTimer > 0) {
-            this._hitMarkerTimer -= dt;
-            if (this._hitMarkerTimer <= 0) {
-                this._hitMarker.style.display = 'none';
-            } else {
-                this._hitMarker.style.opacity = String(Math.min(1, this._hitMarkerTimer / 0.08));
-                if (this._hitMarkerScale > 1) {
-                    this._hitMarkerScale = Math.max(1, this._hitMarkerScale - dt * 6);
-                    this._hitMarker.style.transform = `translate(-50%,-50%) rotate(45deg) scale(${this._hitMarkerScale})`;
-                }
-            }
-        }
-    }
-
     _showGameOver(winner, scoreA, scoreB) {
         // ── Stop player input: release pointer lock, hide FPS HUD ──
         if (this.gameMode === 'playing' || this.gameMode === 'dead') {
             const fps = this._fps;
             this._unscope();
             if (fps.fpGunGroup) fps.fpGunGroup.visible = false;
-            this._hidePlayingHUD();
-            this._hideDeathOverlay();
+            this.hud.hidePlayingHUD();
+            this.deathScreen.hide();
             document.exitPointerLock();
             this.gameMode = 'spectator';
             fps.myEntityId = -1;
         }
 
-        // Remove previous game-over overlay if any
-        const prev = document.getElementById('game-over-overlay');
-        if (prev) prev.remove();
+        // Update weapon data before rendering scoreboard
+        this.scoreboard.updateWeaponData(this.entityRenderer, this.scoreboard.playerNames, TEAM_SIZE);
 
-        const el = document.createElement('div');
-        el.id = 'game-over-overlay';
-        el.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;
-            background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;
-            flex-direction:column;z-index:1000;pointer-events:none;
-            font-family:Consolas,monospace;backdrop-filter:blur(2px);`;
+        // Show game-over overlay
+        this.gameOverScreen.show(winner, scoreA, scoreB);
 
-        const color = winner === 'teamA' ? '#4488ff' : '#ff4444';
-        const teamName = winner === 'teamA' ? 'BLUE TEAM' : 'RED TEAM';
-
-        // Winner banner
-        const banner = document.createElement('div');
-        banner.style.cssText = `text-align:center;margin-bottom:20px;`;
-        banner.innerHTML = `
-            <div style="color:${color};font-size:48px;font-weight:bold;margin-bottom:8px;
-                text-shadow:0 0 20px ${color}44;">${teamName} WINS</div>
-            <div style="color:#ccc;font-size:22px">${scoreA} - ${scoreB}</div>`;
-        el.appendChild(banner);
-
-        // Reuse scoreboard content — build team columns
-        this._updateScoreboardData();
-        const sbContainer = document.createElement('div');
-        sbContainer.style.cssText = `display:flex;align-items:flex-start;gap:32px;
-            background:rgba(0,0,0,0.6);border-radius:10px;padding:20px 28px;
-            min-width:600px;border:1px solid rgba(255,255,255,0.1);`;
-        sbContainer.innerHTML = `
-            <div id="go-teamA" style="flex:1;min-width:260px;"></div>
-            <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;"></div>
-            <div id="go-teamB" style="flex:1;min-width:260px;"></div>`;
-        el.appendChild(sbContainer);
-
-        // Countdown display
-        const countdown = document.createElement('div');
-        countdown.id = 'go-countdown';
-        countdown.style.cssText = `color:#aaa;font-size:16px;margin-top:16px;text-align:center;`;
-        countdown.textContent = 'Next round starting...';
-        el.appendChild(countdown);
-
-        document.body.appendChild(el);
-
-        // Render team columns
-        this._renderGameOverScoreboard();
-    }
-
-    /** Build sorted team lists from scoreboard data (shared by scoreboard + game-over). */
-    _updateScoreboardData() {
-        // Update weapon info from EntityRenderer
-        for (const [entityId, entry] of this.entityRenderer.entities) {
-            if (entry.isGrenade) continue;
-            let name;
-            if (this._playerNames.has(entityId)) {
-                name = this._playerNames.get(entityId);
-            } else if (entry.team === 'teamA') {
-                name = `A-${entityId}`;
-            } else {
-                name = `B-${entityId - TEAM_SIZE}`;
-            }
-            const sb = this._scoreboard[name];
-            if (sb && entry.weaponId) sb.weapon = entry.weaponId;
-        }
-    }
-
-    /** Render team columns into game-over overlay. */
-    _renderGameOverScoreboard() {
-        const goA = document.getElementById('go-teamA');
-        const goB = document.getElementById('go-teamB');
-        if (!goA || !goB) return;
-
-        const teamAList = [];
-        const teamBList = [];
-        for (const [name, stat] of Object.entries(this._scoreboard)) {
-            const entry = { name, ...stat };
-            if (stat.team === 'teamA') teamAList.push(entry);
-            else teamBList.push(entry);
-        }
-        teamAList.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-        teamBList.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-
-        const localName = this._fps.playerName;
-
-        const renderTeam = (entries, teamColor, teamLabel) => {
-            let totalK = 0, totalD = 0;
-            for (const e of entries) { totalK += e.kills; totalD += e.deaths; }
-            let html = `<div style="color:${teamColor};font-weight:bold;font-size:16px;margin-bottom:8px;text-align:center;">${teamLabel}</div>`;
-            html += `<div style="display:flex;color:#888;font-size:11px;padding:2px 6px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:2px;">
-                <span style="flex:1">Name</span><span style="width:30px;text-align:center">K</span>
-                <span style="width:30px;text-align:center">D</span><span style="width:50px;text-align:right">Wpn</span></div>`;
-            for (const e of entries) {
-                const isPlayer = e.name === localName && this._fps.myEntityId >= 0;
-                const com = this._isCOM(e.name);
-                const displayName = com ? `${escapeHTML(e.name)}<span style="color:#666;font-weight:normal">(AI)</span>` : escapeHTML(e.name);
-                const bg = isPlayer ? 'rgba(255,255,255,0.1)' : 'transparent';
-                const nameColor = isPlayer ? '#fff' : 'rgba(255,255,255,0.75)';
-                const wpn = e.weapon || '-';
-                html += `<div style="display:flex;font-size:12px;padding:2px 6px;background:${bg};border-radius:2px;">
-                    <span style="flex:1;color:${nameColor};font-weight:${isPlayer ? 'bold' : 'normal'}">${displayName}</span>
-                    <span style="width:30px;text-align:center;color:#ccc">${e.kills}</span>
-                    <span style="width:30px;text-align:center;color:#ccc">${e.deaths}</span>
-                    <span style="width:50px;text-align:right;color:#888;font-size:11px">${escapeHTML(wpn)}</span></div>`;
-            }
-            html += `<div style="display:flex;font-size:12px;padding:4px 6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.1);color:#aaa;">
-                <span style="flex:1;font-weight:bold">Total</span>
-                <span style="width:30px;text-align:center">${totalK}</span>
-                <span style="width:30px;text-align:center">${totalD}</span>
-                <span style="width:50px"></span></div>`;
-            return html;
-        };
-
-        goA.innerHTML = renderTeam(teamAList, '#4488ff', 'TEAM A');
-        goB.innerHTML = renderTeam(teamBList, '#ff4444', 'TEAM B');
-    }
-
-    /** Update the countdown number in the game-over overlay. */
-    _updateGameOverCountdown(secondsLeft) {
-        const el = document.getElementById('go-countdown');
-        if (el) el.textContent = `Next round in ${secondsLeft}s`;
+        // Render team columns into the overlay
+        this.scoreboard.renderGameOver();
     }
 
     /** Remove game-over overlay and reset client state for a new round. */
     _resetForNewRound() {
         // Remove game-over overlay
-        const overlay = document.getElementById('game-over-overlay');
-        if (overlay) overlay.remove();
+        this.gameOverScreen.remove();
 
         // Hide TAB scoreboard if open
-        this._hideScoreboard();
+        this.scoreboard.hide();
 
         // If playing, switch to spectator (server already removed player)
         if (this.gameMode === 'playing' || this.gameMode === 'dead') {
@@ -1884,9 +1040,9 @@ export class ClientGame {
                 fps.fpMuzzleFlash = null;
             }
             this._unscope();
-            this._hidePlayingHUD();
-            this._hideDeathOverlay();
-            this._resetHUDCache();
+            this.hud.hidePlayingHUD();
+            this.deathScreen.hide();
+            this.hud.resetCache();
             document.exitPointerLock();
         }
 
@@ -1897,19 +1053,10 @@ export class ClientGame {
         this._spectator.lastScoped = false;
         this.spectatorHUD.show();
         this.spectatorHUD.setOverheadMode();
-        this._hidePlayingHUD();
+        this.hud.hidePlayingHUD();
 
         // Reset scoreboard stats
-        for (const key of Object.keys(this._scoreboard)) {
-            delete this._scoreboard[key];
-        }
-        for (let i = 0; i < TEAM_SIZE; i++) {
-            this._scoreboard[`A-${i}`] = { kills: 0, deaths: 0, team: 'teamA', weapon: '' };
-            this._scoreboard[`B-${i}`] = { kills: 0, deaths: 0, team: 'teamB', weapon: '' };
-        }
-        this._playerNames.clear();
-        this._playerPings = {};
-        this._spectatorCount = 0;
+        this.scoreboard.resetStats();
 
         // Clear kill feed
         if (this.killFeed) {
@@ -1917,142 +1064,14 @@ export class ClientGame {
             this.killFeed.container.innerHTML = '';
         }
 
-        // Reset kill streak / banner state
-        this._streakCount = 0;
-        this._streakTimer = 0;
-        this._killBannerTimer = 0;
-        if (this._killBanner) this._killBanner.style.display = 'none';
-        if (this._flagBannerEl) this._flagBannerEl.style.display = 'none';
-        this._flagBannerTimer = 0;
+        // Reset kill streak / banner state (these live in hud now)
+        this.hud._streakCount = 0;
+        this.hud._streakTimer = 0;
+        this.hud._killBannerTimer = 0;
+        this.hud._flagBannerTimer = 0;
         this._prevFlagStates = [];
 
         console.log('[Client] Round reset — back to spectator');
-    }
-
-    _showDeathOverlay() {
-        let el = document.getElementById('death-overlay');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'death-overlay';
-            el.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;
-                background:rgba(139,0,0,0.3);display:flex;align-items:center;justify-content:center;
-                flex-direction:column;z-index:101;`;
-            el.innerHTML = `
-                <div style="color:white;font-family:Arial,sans-serif;text-align:center;">
-                    <div style="font-size:36px;font-weight:bold;margin-bottom:10px;">YOU DIED</div>
-                    <div id="mp-respawn-timer" style="font-size:20px;color:#ccc;"></div>
-                    <div id="mp-weapon-select" style="display:none;margin-top:18px;">
-                        <div style="font-size:14px;color:#aaa;margin-bottom:8px;">Select weapon:</div>
-                        <div style="display:flex;gap:12px;justify-content:center;">
-                            ${this._weaponCardHTML('mp-wp', 1, 'AR15', 'ar', true)}
-                            ${this._weaponCardHTML('mp-wp', 2, 'SMG', 'smg', false)}
-                            ${this._weaponCardHTML('mp-wp', 3, 'LMG', 'lmg', false)}
-                            ${this._weaponCardHTML('mp-wp', 4, 'BOLT', 'bolt', false)}
-                        </div>
-                    </div>
-                    <div id="mp-respawn-prompt" style="display:none;flex-direction:column;align-items:center;margin-top:14px;gap:10px;">
-                        <div style="display:flex;gap:12px;">
-                            <button id="mp-spectate-btn" style="padding:8px 24px;font-size:14px;border:1px solid #666;
-                                border-radius:4px;background:transparent;color:#aaa;cursor:pointer">Spectate (Esc)</button>
-                            <button id="mp-respawn-btn" style="padding:8px 32px;font-size:16px;font-weight:bold;
-                                border:2px solid #4488ff;border-radius:4px;background:rgba(68,136,255,0.3);
-                                color:#fff;cursor:pointer">RESPAWN (Space)</button>
-                        </div>
-                    </div>
-                </div>`;
-            document.body.appendChild(el);
-        }
-        el.style.display = 'flex';
-        this._hidePlayingHUD();
-
-        // Init death countdown
-        this._deathCountdown = 5;
-        this._deathCanRespawn = false;
-        this._deathSelectedWeapon = this._fps.weaponId;
-
-        // Reset weapon card highlights
-        const wpSelect = document.getElementById('mp-weapon-select');
-        if (wpSelect) wpSelect.style.display = 'none';
-        const prompt = document.getElementById('mp-respawn-prompt');
-        if (prompt) prompt.style.display = 'none';
-        const timer = document.getElementById('mp-respawn-timer');
-        if (timer) timer.textContent = 'Respawn in 5s';
-    }
-
-    _hideDeathOverlay() {
-        const el = document.getElementById('death-overlay');
-        if (el) el.style.display = 'none';
-        this._deathCanRespawn = false;
-    }
-
-    _updateDeathScreen(dt) {
-        if (this._deathCountdown > 0) {
-            this._deathCountdown -= dt;
-            const sec = Math.max(0, Math.ceil(this._deathCountdown));
-            const timer = document.getElementById('mp-respawn-timer');
-            if (timer) timer.textContent = `Respawn in ${sec}s`;
-
-            if (this._deathCountdown <= 0) {
-                // Countdown done — show weapon selection
-                this._deathCanRespawn = true;
-                if (timer) timer.textContent = '';
-                const wpSelect = document.getElementById('mp-weapon-select');
-                if (wpSelect) wpSelect.style.display = 'block';
-                const prompt = document.getElementById('mp-respawn-prompt');
-                if (prompt) prompt.style.display = 'flex';
-                this._highlightDeathWeapon(this._deathSelectedWeapon);
-                this._bindDeathClickHandlers();
-            }
-        }
-    }
-
-    _highlightDeathWeapon(weaponId) {
-        const map = { AR15: 'ar', SMG: 'smg', LMG: 'lmg', BOLT: 'bolt' };
-        for (const [wid, shortId] of Object.entries(map)) {
-            const card = document.getElementById(`mp-wp-${shortId}`);
-            if (!card) continue;
-            if (wid === weaponId) {
-                card.style.borderColor = '#4488ff';
-                card.style.background = 'rgba(68,136,255,0.15)';
-            } else {
-                card.style.borderColor = '#888';
-                card.style.background = 'transparent';
-            }
-        }
-    }
-
-    _bindDeathClickHandlers() {
-        if (this._deathClicksBound) return;
-        this._deathClicksBound = true;
-
-        // Weapon card clicks
-        const wpMap = { 'mp-wp-ar': 'AR15', 'mp-wp-smg': 'SMG', 'mp-wp-lmg': 'LMG', 'mp-wp-bolt': 'BOLT' };
-        for (const [elId, wid] of Object.entries(wpMap)) {
-            const card = document.getElementById(elId);
-            if (card) card.addEventListener('click', () => {
-                if (!this._deathCanRespawn) return;
-                this._deathSelectedWeapon = wid;
-                this._highlightDeathWeapon(wid);
-            });
-        }
-
-        // Respawn button
-        const respawnBtn = document.getElementById('mp-respawn-btn');
-        if (respawnBtn) respawnBtn.addEventListener('click', () => {
-            if (!this._deathCanRespawn) return;
-            const weaponId = this._deathSelectedWeapon || 'AR15';
-            this._fps.weaponId = weaponId;
-            const def = WeaponDefs[weaponId];
-            this._fps.moveSpeed = MOVE_SPEED * (def?.moveSpeedMult || 1.0);
-            this.network.sendRespawn(weaponId);
-        });
-
-        // Spectate button
-        const spectateBtn = document.getElementById('mp-spectate-btn');
-        if (spectateBtn) spectateBtn.addEventListener('click', () => {
-            if (!this._deathCanRespawn) return;
-            this._leaveGame();
-        });
     }
 
     _startDeathLerp(killerEntityId) {
@@ -2089,7 +1108,7 @@ export class ClientGame {
 
         const dt = Math.min(this.clock.getDelta(), 0.1);
 
-        // Island vegetation sway (2× speed during storm)
+        // Island vegetation sway (2x speed during storm)
         if (this.island) {
             const swayTime = this._timeOfDay === 2
                 ? this.clock.elapsedTime * 2
@@ -2125,7 +1144,7 @@ export class ClientGame {
             this._updateFPSMode(dt);
         } else if (this.gameMode === 'dead') {
             // Death screen countdown + weapon select
-            this._updateDeathScreen(dt);
+            this.deathScreen.update(dt);
 
             // Camera position stays frozen at the moment of death.
             // Only the death lerp (below) rotates toward the killer.
@@ -2204,27 +1223,25 @@ export class ClientGame {
         this._updateReloadIndicator(dt);
 
         // Hit marker fade
-        this._updateHitMarker(dt);
+        this.hud.updateHitMarker(dt);
 
         // Damage direction fade
-        this._updateDamageIndicator(dt);
+        this.hud.updateDamageIndicator(dt);
 
         // Kill banner + flag banner timers
-        this._updateKillBannerTimer(dt);
-        this._updateFlagBannerTimer(dt);
+        this.hud.updateKillBannerTimer(dt);
+        this.hud.updateFlagBannerTimer(dt);
 
         // Kill feed decay
         this.killFeed.update(dt);
 
         // Ping display (update every ~30 frames)
-        if (this._pingDisplay && this.network.connected) {
+        if (this.network.connected) {
             this._pingFrameCount = (this._pingFrameCount || 0) + 1;
             if (this._pingFrameCount >= 30) {
                 this._pingFrameCount = 0;
                 const rtt = Math.round(this.network.rtt);
-                this._pingDisplay.textContent = `PING: ${rtt}ms`;
-                this._pingDisplay.style.color = rtt < 30 ? 'rgba(100,255,100,0.6)'
-                    : rtt < 80 ? 'rgba(255,255,100,0.6)' : 'rgba(255,100,100,0.6)';
+                this.hud.updatePing(rtt);
             }
         }
 
@@ -2257,11 +1274,11 @@ export class ClientGame {
                 this.camera.fov = fps.isScoped ? def.scopeFOV : 75;
                 this.camera.updateProjectionMatrix();
                 if (fps.fpGunGroup) fps.fpGunGroup.visible = !fps.isScoped;
-                if (this._scopeVignette) {
-                    this._scopeVignette.style.display = fps.isScoped ? 'block' : 'none';
+                if (this.hud.scopeVignette) {
+                    this.hud.scopeVignette.style.display = fps.isScoped ? 'block' : 'none';
                 }
-                if (this._crosshair) {
-                    this._crosshair.style.display = fps.isScoped ? 'none' : 'block';
+                if (this.hud.crosshair) {
+                    this.hud.crosshair.style.display = fps.isScoped ? 'none' : 'block';
                 }
             }
         }
@@ -2556,7 +1573,6 @@ export class ClientGame {
 
         // ── Determine data source ──
         let hp, ammo, grenades, weaponId, isReloading, isBolting;
-        let isSpectatorFollow = false;
 
         if (this.gameMode === 'playing') {
             hp = this._serverHP ?? 100;
@@ -2569,11 +1585,10 @@ export class ClientGame {
             const entry = this._spectator.targetId !== null
                 ? this.entityRenderer.entities.get(this._spectator.targetId) : null;
             if (!entry || !entry.alive) {
-                this._ammoHUD.style.display = 'none';
-                this._healthHUD.style.display = 'none';
+                this.hud.ammoHUD.style.display = 'none';
+                this.hud.healthHUD.style.display = 'none';
                 return;
             }
-            isSpectatorFollow = true;
             hp = entry.hp ?? 100;
             weaponId = entry.weaponId;
             isReloading = entry.isReloading;
@@ -2584,44 +1599,7 @@ export class ClientGame {
             return;
         }
 
-        // ── Health HUD ──
-        const curHP = Math.round(hp);
-        if (curHP !== this._lastHP) {
-            this._lastHP = curHP;
-            const hpColor = curHP > 60 ? '#4f4' : curHP > 30 ? '#ff4' : '#f44';
-            const barWidth = Math.max(0, curHP);
-            this._healthHUD.innerHTML = `
-                <div style="font-size:12px;color:#aaa;margin-bottom:4px">HEALTH</div>
-                <div style="font-size:28px;font-weight:bold;color:${hpColor}">${curHP}</div>
-                <div style="width:120px;height:6px;background:#333;border-radius:3px;margin-top:4px;">
-                    <div style="width:${barWidth}%;height:100%;background:${hpColor};border-radius:3px;"></div>
-                </div>`;
-        }
-
-        // ── Ammo HUD ──
-        const curAmmo = ammo;
-        const curWeaponId = weaponId;
-        const curGrenades = grenades;
-        if (curAmmo !== this._lastAmmo || isReloading !== this._lastReloading
-            || isBolting !== this._lastBolting
-            || curWeaponId !== this._lastWeaponId || curGrenades !== this._lastGrenades) {
-            this._lastAmmo = curAmmo;
-            this._lastReloading = isReloading;
-            this._lastBolting = isBolting;
-            this._lastWeaponId = curWeaponId;
-            this._lastGrenades = curGrenades;
-
-            const def = WeaponDefs[curWeaponId];
-            const statusText = isReloading ? `<span style="color:#ffaa00">RELOADING...</span>`
-                : isBolting ? `<span style="color:#ffaa00">BOLTING...</span>` : '';
-
-            const grenadeText = `<div style="font-size:13px;color:#aaa;margin-top:6px">&#x1F4A3; ${curGrenades}</div>`;
-            this._ammoHUD.innerHTML = `
-                <div style="font-size:12px;color:#aaa;margin-bottom:4px">${def ? def.name : curWeaponId}</div>
-                <div style="font-size:28px;font-weight:bold">
-                    ${curAmmo}<span style="font-size:16px;color:#888"> / ${def ? def.magazineSize : 30}</span>
-                </div>${statusText}${grenadeText}`;
-        }
+        this.hud.updatePlayerHUD(dt, { hp, ammo, grenades, weaponId, isReloading, isBolting });
     }
 
     /**
@@ -2630,91 +1608,30 @@ export class ClientGame {
      */
     _updateReloadIndicator(dt) {
         let isReloading = false;
-        let progress = 0;
+        let isBolting = false;
         let weaponId = null;
+        let isScoped = false;
+        let showCrosshair = false;
 
         if (this.gameMode === 'playing' && this._fps.myEntityId >= 0) {
             weaponId = this._fps.weaponId;
-            const track = this._reloadTrack;
-
-            if (this._fps.isReloading) {
-                if (!track.wasReloading) {
-                    track.elapsed = 0;
-                    track.wasReloading = true;
-                }
-                track.elapsed += dt;
-                const def = WeaponDefs[weaponId];
-                const duration = def ? def.reloadTime : 2;
-                progress = Math.min(1, track.elapsed / duration);
-                isReloading = true;
-            } else if (this._fps.isBolting) {
-                if (!track.wasBolting) {
-                    track.elapsed = 0;
-                    track.wasBolting = true;
-                }
-                track.elapsed += dt;
-                const def = WeaponDefs[weaponId];
-                const duration = def ? (def.boltTime || 1) : 1;
-                progress = Math.min(1, track.elapsed / duration);
-                isReloading = true;
-            } else {
-                track.wasReloading = false;
-                track.wasBolting = false;
-                track.elapsed = 0;
-            }
+            isReloading = this._fps.isReloading;
+            isBolting = this._fps.isBolting;
+            isScoped = this._fps.isScoped;
+            showCrosshair = true;
         } else if (this.gameMode === 'spectator' && this._spectator.mode === 'follow') {
             const entry = this._spectator.targetId !== null
                 ? this.entityRenderer.entities.get(this._spectator.targetId) : null;
             if (entry && entry.alive) {
                 weaponId = entry.weaponId;
-                const track = this._reloadTrack;
-
-                if (entry.isReloading) {
-                    if (!track.wasReloading) {
-                        track.elapsed = 0;
-                        track.wasReloading = true;
-                    }
-                    track.elapsed += dt;
-                    const def = WeaponDefs[weaponId];
-                    const duration = def ? def.reloadTime : 2;
-                    progress = Math.min(1, track.elapsed / duration);
-                    isReloading = true;
-                } else if (entry.isBolting) {
-                    if (!track.wasBolting) {
-                        track.elapsed = 0;
-                        track.wasBolting = true;
-                    }
-                    track.elapsed += dt;
-                    const def = WeaponDefs[weaponId];
-                    const duration = def ? (def.boltTime || 1) : 1;
-                    progress = Math.min(1, track.elapsed / duration);
-                    isReloading = true;
-                } else {
-                    track.wasReloading = false;
-                    track.wasBolting = false;
-                    track.elapsed = 0;
-                }
+                isReloading = entry.isReloading;
+                isBolting = entry.isBolting;
+                isScoped = this._spectator.lastScoped;
+                showCrosshair = true;
             }
         }
 
-        if (isReloading) {
-            this._crosshair.style.display = 'none';
-            this._reloadIndicator.style.display = 'block';
-            if (!this._reloadArc) this._reloadArc = document.getElementById('reload-arc');
-            const circ = 100.53;
-            this._reloadArc.setAttribute('stroke-dashoffset', circ * (1 - progress));
-        } else {
-            this._reloadIndicator.style.display = 'none';
-            // Restore crosshair (unless scoped or dead)
-            const fps = this._fps;
-            const isScoped = this.gameMode === 'playing'
-                ? fps.isScoped
-                : this._spectator.lastScoped;
-            const showCrosshair = !isScoped && (
-                this.gameMode === 'playing'
-                || (this.gameMode === 'spectator' && this._spectator.mode === 'follow'));
-            this._crosshair.style.display = showCrosshair ? 'block' : 'none';
-        }
+        this.hud.updateReloadIndicator(dt, { isReloading, isBolting, weaponId, isScoped, showCrosshair });
     }
 
     _buildKeyBits() {
@@ -2859,7 +1776,7 @@ export class ClientGame {
             const state = this.entityRenderer.getEntityState(spec.targetId);
             if (!state) {
                 spec.deathFreezeTimer = 1.0;
-                this._hidePlayingHUD();
+                this.hud.hidePlayingHUD();
                 if (spec.lastScoped) {
                     spec.lastScoped = false;
                     this.camera.fov = 75;
@@ -2873,7 +1790,7 @@ export class ClientGame {
             spec.targetIndex = spec.targetIndex % aliveIds.length;
             spec.targetId = aliveIds[spec.targetIndex];
             spec.initialized = false;
-            this._resetHUDCache();
+            this.hud.resetCache();
             if (spec.lastScoped) {
                 spec.lastScoped = false;
                 this.camera.fov = 75;
@@ -2926,7 +1843,7 @@ export class ClientGame {
 
         // Show target info in spectator HUD
         const teamPrefix = state.team === 'teamA' ? 'A' : 'B';
-        const displayName = this._playerNames.get(spec.targetId) || `${teamPrefix}-${spec.targetId}`;
+        const displayName = this.scoreboard.playerNames.get(spec.targetId) || `${teamPrefix}-${spec.targetId}`;
         const def = WeaponDefs[entry.weaponId];
         const roleName = def ? def.name : '';
         this.spectatorHUD.updateTarget(
@@ -2935,19 +1852,19 @@ export class ClientGame {
         );
 
         // Show health + ammo HUDs for spectated entity
-        this._healthHUD.style.display = 'block';
-        this._ammoHUD.style.display = 'block';
+        this.hud.healthHUD.style.display = 'block';
+        this.hud.ammoHUD.style.display = 'block';
 
         // Scope vignette + FOV for spectated entity
         const isScoped = entry.isScoped && def && def.scopeFOV;
         if (isScoped !== spec.lastScoped) {
             spec.lastScoped = isScoped;
-            if (this._scopeVignette)
-                this._scopeVignette.style.display = isScoped ? 'block' : 'none';
+            if (this.hud.scopeVignette)
+                this.hud.scopeVignette.style.display = isScoped ? 'block' : 'none';
             this.camera.fov = isScoped ? def.scopeFOV : 75;
             this.camera.updateProjectionMatrix();
-            if (this._crosshair)
-                this._crosshair.style.display = isScoped ? 'none' : 'block';
+            if (this.hud.crosshair)
+                this.hud.crosshair.style.display = isScoped ? 'none' : 'block';
         }
     }
 
@@ -2985,7 +1902,7 @@ export class ClientGame {
         this._spectator.targetIndex = (this._spectator.targetIndex + 1) % aliveIds.length;
         this._spectator.targetId = aliveIds[this._spectator.targetIndex];
         this._spectator.initialized = false;
-        this._resetHUDCache();
+        this.hud.resetCache();
     }
 
     _toggleView() {
@@ -2998,7 +1915,7 @@ export class ClientGame {
                 this.camera.position.z
             );
             this.spectatorHUD.setOverheadMode();
-            this._hidePlayingHUD();
+            this.hud.hidePlayingHUD();
             if (spec.lastScoped) {
                 spec.lastScoped = false;
                 this.camera.fov = 75;
@@ -3009,7 +1926,7 @@ export class ClientGame {
             spec.initialized = false;
             spec.deathFreezeTimer = 0;
             this.spectatorHUD.setFollowMode();
-            this._resetHUDCache();
+            this.hud.resetCache();
         }
     }
 
@@ -3026,17 +1943,16 @@ export class ClientGame {
             fps.fpMuzzleFlash = null;
         }
         this._unscope();
-        this._hidePlayingHUD();
-        this._hideDeathOverlay();
+        this.hud.hidePlayingHUD();
+        this.deathScreen.hide();
         // Clear flag banner & stale flag states so spectator doesn't see team notifications
-        if (this._flagBannerEl) this._flagBannerEl.style.display = 'none';
-        this._flagBannerTimer = 0;
+        this.hud._flagBannerTimer = 0;
         this._prevFlagStates = [];
         this.spectatorHUD.show();
         this.spectatorHUD.setFollowMode();
         this._spectator.initialized = false;
         this._spectator.lastScoped = false;
-        this._resetHUDCache();
+        this.hud.resetCache();
         document.exitPointerLock();
     }
 
@@ -3051,18 +1967,12 @@ export class ClientGame {
         if (e.code === 'Escape') {
             const joinPanel = document.getElementById('join-panel');
             if (joinPanel) {
-                if (this._joinStep === 2) {
+                if (this.joinScreen.joinStep === 2) {
                     // Go back to step 1 (name + team)
-                    document.getElementById('join-step1').style.display = 'flex';
-                    document.getElementById('join-step2').style.display = 'none';
-                    this._joinStep = 1;
+                    this.joinScreen.goBackToStep1();
                     return;
                 }
-                if (this._joinKeyHandler) {
-                    document.removeEventListener('keydown', this._joinKeyHandler);
-                    this._joinKeyHandler = null;
-                }
-                joinPanel.remove();
+                this.joinScreen.removeJoinPanel();
                 return;
             }
             if (this.gameMode === 'playing' || this.gameMode === 'dead') {
@@ -3072,15 +1982,15 @@ export class ClientGame {
         }
 
         // Dead state — weapon selection + respawn
-        if (this.gameMode === 'dead' && this._deathCanRespawn) {
+        if (this.gameMode === 'dead' && this.deathScreen.canRespawn) {
             const weaponKeys = { Digit1: 'AR15', Digit2: 'SMG', Digit3: 'LMG', Digit4: 'BOLT' };
             if (weaponKeys[e.code]) {
-                this._deathSelectedWeapon = weaponKeys[e.code];
-                this._highlightDeathWeapon(this._deathSelectedWeapon);
+                this.deathScreen.selectedWeapon = weaponKeys[e.code];
+                this.deathScreen.highlightWeapon(this.deathScreen.selectedWeapon);
                 return;
             }
             if (e.code === 'Space') {
-                const weaponId = this._deathSelectedWeapon || 'AR15';
+                const weaponId = this.deathScreen.selectedWeapon || 'AR15';
                 this._fps.weaponId = weaponId;
                 const def = WeaponDefs[weaponId];
                 this._fps.moveSpeed = MOVE_SPEED * (def?.moveSpeedMult || 1.0);
@@ -3099,7 +2009,7 @@ export class ClientGame {
                     break;
                 case 'KeyJ':
                 case 'Enter':
-                    this._createJoinUI();
+                    this.joinScreen.createJoinUI((team, wpn, name) => this._joinGame(team, wpn, name), () => {});
                     break;
             }
         }
