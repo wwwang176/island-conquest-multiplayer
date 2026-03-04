@@ -360,6 +360,40 @@ export class ClientGame {
         });
     }
 
+    /** Reset dirty-check caches so HUD refreshes on next frame. */
+    _resetHUDCache() {
+        this._lastHP = undefined;
+        this._lastAmmo = undefined;
+        this._lastWeaponId = undefined;
+        this._lastReloading = undefined;
+        this._lastBolting = undefined;
+        this._lastGrenades = undefined;
+        this._reloadTrack.wasReloading = false;
+        this._reloadTrack.wasBolting = false;
+        this._reloadTrack.elapsed = 0;
+    }
+
+    /** Unscope: reset FOV, hide vignette, show crosshair + gun. */
+    _unscope() {
+        const fps = this._fps;
+        if (!fps.isScoped) return;
+        fps.isScoped = false;
+        this.camera.fov = 75;
+        this.camera.updateProjectionMatrix();
+        if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
+        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
+        if (this._crosshair) this._crosshair.style.display = 'block';
+    }
+
+    /** Hide all playing-mode HUD elements. */
+    _hidePlayingHUD() {
+        this._crosshair.style.display = 'none';
+        this._healthHUD.style.display = 'none';
+        this._ammoHUD.style.display = 'none';
+        this._reloadIndicator.style.display = 'none';
+        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
+    }
+
     _createScoreHUD() {
         const el = document.createElement('div');
         el.id = 'net-score';
@@ -1146,16 +1180,8 @@ export class ClientGame {
             fps.fpGunGroup = null;
             fps.fpMuzzleFlash = null;
         }
-        if (fps.isScoped) {
-            fps.isScoped = false;
-            this.camera.fov = 75;
-            this.camera.updateProjectionMatrix();
-        }
-        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-        this._crosshair.style.display = 'none';
-        this._healthHUD.style.display = 'none';
-        this._ammoHUD.style.display = 'none';
-        this._reloadIndicator.style.display = 'none';
+        this._unscope();
+        this._hidePlayingHUD();
         if (this._pingInterval) clearInterval(this._pingInterval);
         if (this._blocker) {
             this._blocker.classList.remove('hidden');
@@ -1323,15 +1349,7 @@ export class ClientGame {
         this._hideDeathOverlay();
 
         // Initialize health + ammo HUD content
-        this._lastHP = undefined;
-        this._lastAmmo = undefined;
-        this._lastWeaponId = undefined;
-        this._lastReloading = undefined;
-        this._lastBolting = undefined;
-        this._lastGrenades = undefined;
-        this._reloadTrack.wasReloading = false;
-        this._reloadTrack.wasBolting = false;
-        this._reloadTrack.elapsed = 0;
+        this._resetHUDCache();
 
         // Request pointer lock
         this.input.requestPointerLock();
@@ -1350,12 +1368,7 @@ export class ClientGame {
 
         if (inVehicle && !wasInVehicle) {
             // Entered vehicle — unscope (gun stays visible, matching single-player)
-            if (fps.isScoped) {
-                fps.isScoped = false;
-                this.camera.fov = 75;
-                this.camera.updateProjectionMatrix();
-                if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-            }
+            this._unscope();
         } else if (!inVehicle && wasInVehicle) {
             // Exited vehicle — restore FP gun (skip if dead, death hides gun)
             if (this.gameMode !== 'dead') {
@@ -1413,12 +1426,7 @@ export class ClientGame {
 
                 if (this.gameMode === 'playing' && !alive) {
                     // Just died — unscope and hide gun
-                    if (fps.isScoped) {
-                        fps.isScoped = false;
-                        this.camera.fov = 75;
-                        this.camera.updateProjectionMatrix();
-                        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-                    }
+                    this._unscope();
                     if (fps.fpGunGroup) fps.fpGunGroup.visible = false;
                     this.gameMode = 'dead';
                     this._streakCount = 0;
@@ -1434,10 +1442,7 @@ export class ClientGame {
                     this._ammoHUD.style.display = 'block';
                     if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
                     fps.deathLerp.active = false;
-                    this._lastHP = undefined;
-                    this._lastAmmo = undefined;
-                    this._reloadTrack.wasReloading = false;
-                    this._reloadTrack.wasBolting = false;
+                    this._resetHUDCache();
                     this.input.requestPointerLock();
                 }
 
@@ -1728,17 +1733,9 @@ export class ClientGame {
         // ── Stop player input: release pointer lock, hide FPS HUD ──
         if (this.gameMode === 'playing' || this.gameMode === 'dead') {
             const fps = this._fps;
-            if (fps.isScoped) {
-                fps.isScoped = false;
-                this.camera.fov = 75;
-                this.camera.updateProjectionMatrix();
-            }
-            if (this._scopeVignette) this._scopeVignette.style.display = 'none';
+            this._unscope();
             if (fps.fpGunGroup) fps.fpGunGroup.visible = false;
-            this._crosshair.style.display = 'none';
-            this._healthHUD.style.display = 'none';
-            this._ammoHUD.style.display = 'none';
-            this._reloadIndicator.style.display = 'none';
+            this._hidePlayingHUD();
             this._hideDeathOverlay();
             document.exitPointerLock();
             this.gameMode = 'spectator';
@@ -1886,25 +1883,10 @@ export class ClientGame {
                 fps.fpGunGroup = null;
                 fps.fpMuzzleFlash = null;
             }
-            if (fps.isScoped) {
-                fps.isScoped = false;
-                this.camera.fov = 75;
-                this.camera.updateProjectionMatrix();
-            }
-            if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-            this._crosshair.style.display = 'none';
-            this._healthHUD.style.display = 'none';
-            this._ammoHUD.style.display = 'none';
-            this._reloadIndicator.style.display = 'none';
+            this._unscope();
+            this._hidePlayingHUD();
             this._hideDeathOverlay();
-            this._lastHP = undefined;
-            this._lastAmmo = undefined;
-            this._lastWeaponId = undefined;
-            this._lastReloading = undefined;
-            this._lastBolting = undefined;
-            this._reloadTrack.wasReloading = false;
-            this._reloadTrack.wasBolting = false;
-            this._reloadTrack.elapsed = 0;
+            this._resetHUDCache();
             document.exitPointerLock();
         }
 
@@ -1915,11 +1897,7 @@ export class ClientGame {
         this._spectator.lastScoped = false;
         this.spectatorHUD.show();
         this.spectatorHUD.setOverheadMode();
-        // Hide follow-mode HUD elements
-        this._healthHUD.style.display = 'none';
-        this._ammoHUD.style.display = 'none';
-        this._reloadIndicator.style.display = 'none';
-        this._crosshair.style.display = 'none';
+        this._hidePlayingHUD();
 
         // Reset scoreboard stats
         for (const key of Object.keys(this._scoreboard)) {
@@ -1985,10 +1963,7 @@ export class ClientGame {
             document.body.appendChild(el);
         }
         el.style.display = 'flex';
-        this._crosshair.style.display = 'none';
-        this._healthHUD.style.display = 'none';
-        this._ammoHUD.style.display = 'none';
-        this._reloadIndicator.style.display = 'none';
+        this._hidePlayingHUD();
 
         // Init death countdown
         this._deathCountdown = 5;
@@ -2294,12 +2269,7 @@ export class ClientGame {
 
         // Force unscope on reload/bolt
         if (fps.isScoped && (fps.isReloading || fps.isBolting)) {
-            fps.isScoped = false;
-            this.camera.fov = 75;
-            this.camera.updateProjectionMatrix();
-            if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
-            if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-            if (this._crosshair) this._crosshair.style.display = 'block';
+            this._unscope();
         }
 
         // ── Mouse look (with scope sensitivity) ──
@@ -2889,13 +2859,9 @@ export class ClientGame {
             const state = this.entityRenderer.getEntityState(spec.targetId);
             if (!state) {
                 spec.deathFreezeTimer = 1.0;
-                this._healthHUD.style.display = 'none';
-                this._ammoHUD.style.display = 'none';
-                this._reloadIndicator.style.display = 'none';
-                this._crosshair.style.display = 'none';
+                this._hidePlayingHUD();
                 if (spec.lastScoped) {
                     spec.lastScoped = false;
-                    if (this._scopeVignette) this._scopeVignette.style.display = 'none';
                     this.camera.fov = 75;
                     this.camera.updateProjectionMatrix();
                 }
@@ -2907,16 +2873,9 @@ export class ClientGame {
             spec.targetIndex = spec.targetIndex % aliveIds.length;
             spec.targetId = aliveIds[spec.targetIndex];
             spec.initialized = false;
-            // Reset HUD for new target
-            this._lastHP = undefined;
-            this._lastAmmo = undefined;
-            this._lastWeaponId = undefined;
-            this._reloadTrack.wasReloading = false;
-            this._reloadTrack.wasBolting = false;
-            this._reloadTrack.elapsed = 0;
+            this._resetHUDCache();
             if (spec.lastScoped) {
                 spec.lastScoped = false;
-                if (this._scopeVignette) this._scopeVignette.style.display = 'none';
                 this.camera.fov = 75;
                 this.camera.updateProjectionMatrix();
             }
@@ -3026,15 +2985,7 @@ export class ClientGame {
         this._spectator.targetIndex = (this._spectator.targetIndex + 1) % aliveIds.length;
         this._spectator.targetId = aliveIds[this._spectator.targetIndex];
         this._spectator.initialized = false;
-        // Reset HUD dirty-check so info refreshes for new target
-        this._lastHP = undefined;
-        this._lastAmmo = undefined;
-        this._lastWeaponId = undefined;
-        this._lastReloading = undefined;
-        this._lastBolting = undefined;
-        this._reloadTrack.wasReloading = false;
-        this._reloadTrack.wasBolting = false;
-        this._reloadTrack.elapsed = 0;
+        this._resetHUDCache();
     }
 
     _toggleView() {
@@ -3047,14 +2998,9 @@ export class ClientGame {
                 this.camera.position.z
             );
             this.spectatorHUD.setOverheadMode();
-            // Hide player HUDs in overhead mode
-            this._healthHUD.style.display = 'none';
-            this._ammoHUD.style.display = 'none';
-            this._reloadIndicator.style.display = 'none';
-            this._crosshair.style.display = 'none';
+            this._hidePlayingHUD();
             if (spec.lastScoped) {
                 spec.lastScoped = false;
-                if (this._scopeVignette) this._scopeVignette.style.display = 'none';
                 this.camera.fov = 75;
                 this.camera.updateProjectionMatrix();
             }
@@ -3063,14 +3009,7 @@ export class ClientGame {
             spec.initialized = false;
             spec.deathFreezeTimer = 0;
             this.spectatorHUD.setFollowMode();
-            // Reset dirty-check so HUDs refresh for new target
-            this._lastHP = undefined;
-            this._lastAmmo = undefined;
-            this._lastWeaponId = undefined;
-            this._lastReloading = undefined;
-            this._lastBolting = undefined;
-            this._reloadTrack.wasReloading = false;
-            this._reloadTrack.wasBolting = false;
+            this._resetHUDCache();
         }
     }
 
@@ -3086,18 +3025,8 @@ export class ClientGame {
             fps.fpGunGroup = null;
             fps.fpMuzzleFlash = null;
         }
-        // Unscope
-        if (fps.isScoped) {
-            fps.isScoped = false;
-            this.camera.fov = 75;
-            this.camera.updateProjectionMatrix();
-        }
-        if (this._scopeVignette) this._scopeVignette.style.display = 'none';
-
-        this._crosshair.style.display = 'none';
-        this._healthHUD.style.display = 'none';
-        this._ammoHUD.style.display = 'none';
-        this._reloadIndicator.style.display = 'none';
+        this._unscope();
+        this._hidePlayingHUD();
         this._hideDeathOverlay();
         // Clear flag banner & stale flag states so spectator doesn't see team notifications
         if (this._flagBannerEl) this._flagBannerEl.style.display = 'none';
@@ -3107,15 +3036,7 @@ export class ClientGame {
         this.spectatorHUD.setFollowMode();
         this._spectator.initialized = false;
         this._spectator.lastScoped = false;
-        // Reset HUD dirty-check for spectator mode
-        this._lastHP = undefined;
-        this._lastAmmo = undefined;
-        this._lastWeaponId = undefined;
-        this._lastReloading = undefined;
-        this._lastBolting = undefined;
-        this._reloadTrack.wasReloading = false;
-        this._reloadTrack.wasBolting = false;
-        this._reloadTrack.elapsed = 0;
+        this._resetHUDCache();
         document.exitPointerLock();
     }
 
