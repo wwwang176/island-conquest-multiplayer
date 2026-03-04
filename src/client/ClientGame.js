@@ -12,10 +12,10 @@ import { InputManager } from '../core/InputManager.js';
 import { EventBus } from '../core/EventBus.js';
 import { NetworkClient } from './NetworkClient.js';
 import { EntityRenderer, buildGunMesh, createMuzzleFlashMesh } from './EntityRenderer.js';
-import { VehicleRenderer, HELI_PILOT_OFFSET, HELI_PASSENGER_SLOTS } from './VehicleRenderer.js';
-import { EventType, SurfaceType, KeyBit } from '../shared/protocol.js';
+import { VehicleRenderer } from './VehicleRenderer.js';
+import { EventType, SurfaceType } from '../shared/protocol.js';
 import { WeaponDefs, GunAnim } from '../entities/WeaponDefs.js';
-import { MAP_WIDTH, MAP_DEPTH, GRAVITY, MOVE_SPEED, ACCEL, DECEL, TEAM_SIZE } from '../shared/constants.js';
+import { MOVE_SPEED, TEAM_SIZE } from '../shared/constants.js';
 import Stats from 'three/addons/libs/stats.module.js';
 
 import { ClientHUD } from './ClientHUD.js';
@@ -23,30 +23,18 @@ import { Scoreboard } from './Scoreboard.js';
 import { JoinScreen } from './JoinScreen.js';
 import { DeathScreen } from './DeathScreen.js';
 import { GameOverScreen } from './GameOverScreen.js';
+import { FPSController } from './FPSController.js';
+import { SpectatorController } from './SpectatorController.js';
+import { VehicleController } from './VehicleController.js';
 
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
-
-// Reusable vectors for FPS prediction
-const _pForward = new THREE.Vector3();
-const _pRight   = new THREE.Vector3();
-const _pYawQuat = new THREE.Quaternion();
-const _pMoveDir = new THREE.Vector3();
-const _pYAxis   = new THREE.Vector3(0, 1, 0);
-
-// Reusable objects for vehicle occupant positioning
-const _seatQuat = new THREE.Quaternion();
-const _aimDirVec = new THREE.Vector3();
-const _invQuat = new THREE.Quaternion();
 
 // Reusable vectors for VFX
 const _firedOrigin = new THREE.Vector3();
 const _firedDir    = new THREE.Vector3();
 const _hitPoint    = new THREE.Vector3();
 const _hitNormal   = new THREE.Vector3();
-const _headLocal   = new THREE.Vector3();
 const _normalRaycaster = new THREE.Raycaster();
-
-const PLAYER_JUMP_SPEED = 4;
 
 
 /**
@@ -236,8 +224,10 @@ export class ClientGame {
         this._serverAmmo = 30;
         this._serverGrenades = 2;
 
-        // ── Vehicle HUD ──
-        this._createVehicleHUD();
+        // ── Controllers ──
+        this.fpsController = new FPSController();
+        this.spectatorController = new SpectatorController();
+        this.vehicleController = new VehicleController();
 
         // ── Previous flag states for detecting changes ──
         this._prevFlagStates = [];
@@ -330,40 +320,6 @@ export class ClientGame {
         if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
         if (this.hud.scopeVignette) this.hud.scopeVignette.style.display = 'none';
         if (this.hud.crosshair) this.hud.crosshair.style.display = 'block';
-    }
-
-    _createVehicleHUD() {
-        const el = document.createElement('div');
-        el.id = 'vehicle-hud';
-        el.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
-            color:white;font-family:Consolas,monospace;background:rgba(0,0,0,0.5);
-            padding:10px 20px;border-radius:6px;pointer-events:none;z-index:100;
-            text-align:center;display:none;`;
-        el.innerHTML = `
-            <div id="vhud-title" style="font-size:14px;font-weight:bold;margin-bottom:4px"></div>
-            <div style="width:200px;height:8px;background:#333;border-radius:4px;margin:4px auto;">
-                <div id="vhud-hp-bar" style="height:100%;border-radius:4px;"></div>
-            </div>
-            <div id="vhud-controls" style="font-size:11px;color:#aaa;margin-top:4px"></div>`;
-        document.body.appendChild(el);
-        this._vehicleHUD = el;
-        this._vhudTitle = document.getElementById('vhud-title');
-        this._vhudHpBar = document.getElementById('vhud-hp-bar');
-        this._vhudControls = document.getElementById('vhud-controls');
-        this._lastVehicleTitle = null;
-        this._lastVehicleHpPct = -1;
-
-        // "Press E" prompt
-        const prompt = document.createElement('div');
-        prompt.id = 'vehicle-prompt';
-        prompt.style.cssText = `position:fixed;bottom:100px;left:50%;transform:translateX(-50%);
-            font-family:Consolas,monospace;font-size:14px;
-            color:#fff;text-shadow:1px 1px 3px rgba(0,0,0,0.7);z-index:100;
-            display:none;pointer-events:none;
-            background:rgba(0,0,0,0.4);padding:6px 14px;border-radius:6px;`;
-        prompt.textContent = 'Press E to board helicopter';
-        document.body.appendChild(prompt);
-        this._vehiclePrompt = prompt;
     }
 
     _joinGame(team, weaponId, playerName) {
@@ -1137,11 +1093,12 @@ export class ClientGame {
         this.vehicleRenderer.update(dt);
 
         // Position occupants on vehicle seats
-        this._updateVehicleOccupants();
+        this.vehicleController.updateOccupants(this._fps, this.entityRenderer, this.vehicleRenderer);
 
         // Camera mode
         if (this.gameMode === 'playing') {
-            this._updateFPSMode(dt);
+            this.fpsController.update(dt, this._fps, this.input, this.camera, this.network, this.island, this._navGrid, this.hud);
+            if (this._fps.vehicleId !== 0xFF) this.vehicleController.updateCamera(this._fps, this.vehicleRenderer, this.camera);
         } else if (this.gameMode === 'dead') {
             // Death screen countdown + weapon select
             this.deathScreen.update(dt);
@@ -1150,9 +1107,9 @@ export class ClientGame {
             // Only the death lerp (below) rotates toward the killer.
         } else if (this.gameMode === 'spectator') {
             if (this._spectator.mode === 'follow') {
-                this._updateSpectatorFollow(dt);
+                this.spectatorController.updateFollow(dt, this._spectator, this.entityRenderer, this.camera, this.hud, this.spectatorHUD, this.scoreboard, this._fps);
             } else {
-                this._updateSpectatorOverhead(dt);
+                this.spectatorController.updateOverhead(dt, this._spectator, this.input, this.camera);
             }
         }
 
@@ -1214,7 +1171,7 @@ export class ClientGame {
         }
 
         // Vehicle HUD + prompt
-        this._updateVehicleHUD();
+        this.vehicleController.updateHUD(this._fps, this.vehicleRenderer, this.gameMode);
 
         // Player HUD (health + ammo, works in both playing and spectator follow)
         this._updatePlayerHUD(dt);
@@ -1248,320 +1205,6 @@ export class ClientGame {
         // Render
         this.renderer.render(this.scene, this.camera);
         this.stats.end();
-    }
-
-    // ═══════════════════════════════════════════════════════
-    // FPS Mode
-    // ═══════════════════════════════════════════════════════
-
-    _updateFPSMode(dt) {
-        const fps = this._fps;
-
-        // ── Grenade throw timer ──
-        const grenadeDown = this.input.isKeyDown('KeyG');
-        if (grenadeDown && !fps.prevGrenade) {
-            fps.grenadeThrowTimer = 0.5;
-        }
-        fps.prevGrenade = grenadeDown;
-        if (fps.grenadeThrowTimer > 0) fps.grenadeThrowTimer -= dt;
-
-        // ── Scope toggle (right-click edge trigger) ──
-        const rightDown = this.input.rightMouseDown;
-        if (rightDown && !fps.prevRightMouse) {
-            const def = WeaponDefs[fps.weaponId];
-            if (def && def.scopeFOV && !fps.isReloading && !fps.isBolting && fps.grenadeThrowTimer <= 0) {
-                fps.isScoped = !fps.isScoped;
-                this.camera.fov = fps.isScoped ? def.scopeFOV : 75;
-                this.camera.updateProjectionMatrix();
-                if (fps.fpGunGroup) fps.fpGunGroup.visible = !fps.isScoped;
-                if (this.hud.scopeVignette) {
-                    this.hud.scopeVignette.style.display = fps.isScoped ? 'block' : 'none';
-                }
-                if (this.hud.crosshair) {
-                    this.hud.crosshair.style.display = fps.isScoped ? 'none' : 'block';
-                }
-            }
-        }
-        fps.prevRightMouse = rightDown;
-
-        // Force unscope on reload/bolt
-        if (fps.isScoped && (fps.isReloading || fps.isBolting)) {
-            this._unscope();
-        }
-
-        // ── Mouse look (with scope sensitivity) ──
-        if (this.input.isPointerLocked) {
-            const { dx, dy } = this.input.consumeMouseDelta();
-            const sens = fps.isScoped ? fps.mouseSensitivity * 0.5 : fps.mouseSensitivity;
-            fps.yaw -= dx * sens;
-            fps.pitch -= dy * sens;
-            fps.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, fps.pitch));
-        }
-
-        // Build key bits
-        const keys = this._buildKeyBits();
-
-        // Send input to server
-        fps.localTick++;
-        this.network.sendInput(fps.localTick, keys, 0, 0, fps.yaw, fps.pitch);
-
-        const inVehicle = fps.vehicleId !== 0xFF;
-
-        // Local prediction (skip when in vehicle — server controls position)
-        if (!inVehicle) {
-            this._predictMovement(dt, keys);
-
-            // Smooth correction toward server position
-            const t = Math.min(1, 12 * dt);
-            fps.predictedPos.lerp(fps.serverPos, t);
-        }
-
-        // ── FP gun animations ──
-        if (fps.fpGunGroup) {
-            // Recoil recovery
-            fps.fpRecoilOffset = Math.max(0, fps.fpRecoilOffset - GunAnim.recoilRecovery * dt);
-
-            // Reload/bolt tilt
-            const targetTilt = fps.isReloading ? GunAnim.reloadTilt
-                : fps.isBolting ? GunAnim.boltTilt : 0;
-            const tiltSpeed = (targetTilt > fps.fpReloadTilt) ? 12 : 8;
-            fps.fpReloadTilt += (targetTilt - fps.fpReloadTilt) * Math.min(1, tiltSpeed * dt);
-
-            // Apply to gun group
-            fps.fpGunGroup.position.z = -fps.fpRecoilOffset;
-            fps.fpGunGroup.rotation.x = fps.fpReloadTilt;
-        }
-
-        // ── FP muzzle flash timer ──
-        if (fps.fpMuzzleFlashTimer > 0) {
-            fps.fpMuzzleFlashTimer -= dt;
-            if (fps.fpMuzzleFlashTimer <= 0 && fps.fpMuzzleFlash) {
-                fps.fpMuzzleFlash.visible = false;
-            }
-        }
-
-        // ── Update camera ──
-        if (inVehicle) {
-            this._updateVehicleCamera();
-        } else {
-            this.camera.position.set(
-                fps.predictedPos.x,
-                fps.predictedPos.y + 1.6,
-                fps.predictedPos.z
-            );
-        }
-        _euler.set(fps.pitch, fps.yaw, 0, 'YXZ');
-        this.camera.quaternion.setFromEuler(_euler);
-    }
-
-    /**
-     * Position camera in vehicle cockpit/seat.
-     */
-    _updateVehicleCamera() {
-        const fps = this._fps;
-        const vEntry = this.vehicleRenderer.vehicles.get(fps.vehicleId);
-        if (!vEntry) {
-            // Fallback — use predicted pos
-            this.camera.position.set(fps.predictedPos.x, fps.predictedPos.y + 1.6, fps.predictedPos.z);
-            return;
-        }
-
-        // Determine if pilot or passenger
-        const isPilot = vEntry.pilotId === fps.myEntityId;
-        let offset;
-
-        if (isPilot) {
-            offset = { x: HELI_PILOT_OFFSET.x, y: HELI_PILOT_OFFSET.y + 1.6, z: HELI_PILOT_OFFSET.z };
-        } else {
-            // Find which passenger slot
-            let slotIdx = -1;
-            for (let i = 0; i < vEntry.passengerIds.length; i++) {
-                if (vEntry.passengerIds[i] === fps.myEntityId) {
-                    slotIdx = i;
-                    break;
-                }
-            }
-            if (slotIdx >= 0 && slotIdx < HELI_PASSENGER_SLOTS.length) {
-                const slot = HELI_PASSENGER_SLOTS[slotIdx];
-                offset = { x: slot.x, y: slot.y + 1.6, z: slot.z };
-            } else {
-                offset = { x: 0, y: 0.5, z: 0 };
-            }
-        }
-
-        const seatPos = this.vehicleRenderer.getSeatWorldPos(fps.vehicleId, offset);
-        if (seatPos) {
-            this.camera.position.copy(seatPos);
-        } else {
-            this.camera.position.set(vEntry.mesh.position.x, vEntry.mesh.position.y + 1.6, vEntry.mesh.position.z);
-        }
-    }
-
-    /**
-     * Position entity meshes on vehicle seats with proper sitting pose.
-     * Mirrors the single-player AIController.updateContinuous() lines 549-621.
-     */
-    _updateVehicleOccupants() {
-        const fps = this._fps;
-
-        // First: clear all _inVehicle flags so EntityRenderer can animate freed entities
-        for (const [, entry] of this.entityRenderer.entities) {
-            if (entry._inVehicle) entry._inVehicle = false;
-        }
-
-        for (const [, vEntry] of this.vehicleRenderer.vehicles) {
-            if (!vEntry.mesh.visible) continue;
-
-            // Get helicopter attitude quaternion from the client attitudeGroup
-            vEntry.attitudeGroup.updateWorldMatrix(true, false);
-            _seatQuat.setFromRotationMatrix(vEntry.attitudeGroup.matrixWorld);
-
-            // Pilot
-            if (vEntry.pilotId !== 0xFFFF) {
-                const entry = this.entityRenderer.entities.get(vEntry.pilotId);
-                if (entry && entry.mesh) {
-                    entry._inVehicle = true;
-                    if (vEntry.pilotId === fps.myEntityId) {
-                        entry.mesh.visible = false;
-                    } else {
-                        entry.mesh.visible = true;
-                        const seatPos = this.vehicleRenderer.getSeatWorldPos(vEntry.vehicleId, HELI_PILOT_OFFSET);
-                        if (seatPos) {
-                            entry.mesh.position.copy(seatPos);
-                        }
-                        // Full attitude quaternion (pitch + roll + yaw)
-                        entry.mesh.quaternion.copy(_seatQuat);
-                        // Body faces forward relative to helicopter
-                        if (entry.lowerBody) entry.lowerBody.rotation.y = Math.PI;
-                        if (entry.upperBody) {
-                            entry.upperBody.rotation.y = Math.PI;
-                            if (entry.shoulderPivot) entry.shoulderPivot.rotation.x = 0;
-                        }
-                        // Sitting pose — legs bent 90 degrees
-                        if (entry.leftLeg) entry.leftLeg.rotation.x = Math.PI / 2;
-                        if (entry.rightLeg) entry.rightLeg.rotation.x = Math.PI / 2;
-                    }
-                }
-            }
-
-            // Passengers
-            for (let i = 0; i < vEntry.passengerIds.length; i++) {
-                const pid = vEntry.passengerIds[i];
-                if (pid === 0xFFFF) continue;
-                const entry = this.entityRenderer.entities.get(pid);
-                if (!entry || !entry.mesh) continue;
-
-                entry._inVehicle = true;
-                const slot = HELI_PASSENGER_SLOTS[i];
-                if (!slot) continue;
-
-                if (pid === fps.myEntityId) {
-                    entry.mesh.visible = false;
-                } else {
-                    entry.mesh.visible = true;
-                    const seatPos = this.vehicleRenderer.getSeatWorldPos(vEntry.vehicleId, slot);
-                    if (seatPos) {
-                        entry.mesh.position.copy(seatPos);
-                    }
-                    // Full attitude quaternion
-                    entry.mesh.quaternion.copy(_seatQuat);
-                    // Lower body faces outward (door direction)
-                    if (entry.lowerBody) {
-                        entry.lowerBody.rotation.y = slot.facingOffset;
-                    }
-                    // Upper body aim: server already sends heli-local yaw/pitch, apply directly
-                    if (entry.upperBody) {
-                        const state = this.entityRenderer.interp.getInterpolated(pid);
-                        if (state) {
-                            entry.upperBody.rotation.y = state.yaw;
-                            if (entry.shoulderPivot) {
-                                entry.shoulderPivot.rotation.x = state.pitch;
-                            }
-                        } else {
-                            entry.upperBody.rotation.y = slot.facingOffset;
-                            if (entry.shoulderPivot) entry.shoulderPivot.rotation.x = 0;
-                        }
-                    }
-                    // Sitting pose — legs at 45 degrees
-                    if (entry.leftLeg) entry.leftLeg.rotation.x = Math.PI / 4;
-                    if (entry.rightLeg) entry.rightLeg.rotation.x = Math.PI / 4;
-                }
-            }
-        }
-    }
-
-    /**
-     * Update vehicle HUD (title, HP bar, controls) and "Press E" prompt.
-     */
-    _updateVehicleHUD() {
-        const fps = this._fps;
-        const inVehicle = fps.vehicleId !== 0xFF;
-
-        // Vehicle HUD — show when in vehicle
-        if (this._vehicleHUD) {
-            if (inVehicle && (this.gameMode === 'playing')) {
-                const vEntry = this.vehicleRenderer.vehicles.get(fps.vehicleId);
-                if (vEntry) {
-                    this._vehicleHUD.style.display = 'block';
-
-                    // Determine role and occupant count
-                    const isPilot = vEntry.pilotId === fps.myEntityId;
-                    let occ = 0;
-                    if (vEntry.pilotId !== 0xFFFF) occ++;
-                    for (const pid of vEntry.passengerIds) {
-                        if (pid !== 0xFFFF) occ++;
-                    }
-                    const typeName = `HELICOPTER [${occ}/4]` + (isPilot ? ' PILOT' : ' GUNNER');
-                    if (typeName !== this._lastVehicleTitle) {
-                        this._lastVehicleTitle = typeName;
-                        this._vhudTitle.textContent = typeName;
-                        this._vhudControls.textContent = isPilot
-                            ? 'WASD Move | Space Up | Shift Down | E Exit'
-                            : 'Mouse Aim | LMB Fire | E Exit';
-                    }
-
-                    // HP progress bar
-                    const maxHP = 6000;
-                    const hpPct = Math.round(Math.max(0, vEntry.hp / maxHP * 100));
-                    if (hpPct !== this._lastVehicleHpPct) {
-                        this._lastVehicleHpPct = hpPct;
-                        const hpColor = hpPct > 50 ? '#4f4' : hpPct > 25 ? '#ff4' : '#f44';
-                        this._vhudHpBar.style.width = hpPct + '%';
-                        this._vhudHpBar.style.background = hpColor;
-                    }
-                } else {
-                    this._vehicleHUD.style.display = 'none';
-                }
-            } else {
-                if (this._lastVehicleTitle) {
-                    this._vehicleHUD.style.display = 'none';
-                    this._lastVehicleTitle = null;
-                    this._lastVehicleHpPct = -1;
-                }
-            }
-        }
-
-        // "Press E" prompt — show when near a vehicle (on foot, playing)
-        if (this._vehiclePrompt) {
-            if (!inVehicle && this.gameMode === 'playing' && fps.myEntityId >= 0) {
-                let nearVehicle = false;
-                const pp = fps.predictedPos;
-                for (const [, vEntry] of this.vehicleRenderer.vehicles) {
-                    if (!vEntry.alive) continue;
-                    const vp = vEntry.mesh.position;
-                    const dx = pp.x - vp.x;
-                    const dy = pp.y - vp.y;
-                    const dz = pp.z - vp.z;
-                    if (dx * dx + dy * dy + dz * dz < vEntry.enterRadius * vEntry.enterRadius) {
-                        nearVehicle = true;
-                        break;
-                    }
-                }
-                this._vehiclePrompt.style.display = nearVehicle ? 'block' : 'none';
-            } else {
-                this._vehiclePrompt.style.display = 'none';
-            }
-        }
     }
 
     /**
@@ -1632,302 +1275,6 @@ export class ClientGame {
         }
 
         this.hud.updateReloadIndicator(dt, { isReloading, isBolting, weaponId, isScoped, showCrosshair });
-    }
-
-    _buildKeyBits() {
-        let keys = 0;
-        if (this.input.isKeyDown('KeyW')) keys |= KeyBit.FORWARD;
-        if (this.input.isKeyDown('KeyS')) keys |= KeyBit.BACKWARD;
-        if (this.input.isKeyDown('KeyA')) keys |= KeyBit.LEFT;
-        if (this.input.isKeyDown('KeyD')) keys |= KeyBit.RIGHT;
-        if (this.input.isKeyDown('Space')) keys |= KeyBit.JUMP;
-        if (this.input.isKeyDown('ShiftLeft') || this.input.isKeyDown('ShiftRight')) keys |= KeyBit.SPRINT;
-        if (this.input.mouseDown) keys |= KeyBit.FIRE;
-        if (this.input.rightMouseDown) keys |= KeyBit.SCOPE;
-        if (this.input.isKeyDown('KeyR')) keys |= KeyBit.RELOAD;
-        if (this.input.isKeyDown('KeyG')) keys |= KeyBit.GRENADE;
-        if (this.input.isKeyDown('KeyE')) keys |= KeyBit.INTERACT;
-        return keys;
-    }
-
-    /**
-     * Client-side movement prediction.
-     * Replicates server movement logic for instant camera response.
-     * NavGrid check is skipped (server will correct via InputAck if needed).
-     */
-    _predictMovement(dt, keys) {
-        const fps = this._fps;
-        if (!this.island) return;
-
-        const getH = (x, z) => this.island.getHeightAt(x, z);
-        const groundY = getH(fps.predictedPos.x, fps.predictedPos.z);
-
-        // Jumping
-        if (fps.isJumping) {
-            fps.jumpVelY -= GRAVITY * dt;
-            fps.predictedPos.y += fps.jumpVelY * dt;
-            if (fps.predictedPos.y <= groundY + 0.05) {
-                fps.predictedPos.y = groundY + 0.05;
-                fps.isJumping = false;
-                fps.jumpVelY = 0;
-            }
-        }
-
-        // Build move direction
-        _pForward.set(0, 0, -1);
-        _pRight.set(1, 0, 0);
-        _pYawQuat.setFromAxisAngle(_pYAxis, fps.yaw);
-        _pForward.applyQuaternion(_pYawQuat);
-        _pRight.applyQuaternion(_pYawQuat);
-
-        _pMoveDir.set(0, 0, 0);
-        if (keys & KeyBit.FORWARD)  _pMoveDir.add(_pForward);
-        if (keys & KeyBit.BACKWARD) _pMoveDir.sub(_pForward);
-        if (keys & KeyBit.LEFT)     _pMoveDir.sub(_pRight);
-        if (keys & KeyBit.RIGHT)    _pMoveDir.add(_pRight);
-
-        // Jump (edge-triggered)
-        const jumpDown = !!(keys & KeyBit.JUMP);
-        if (jumpDown && !fps.prevSpace && !fps.isJumping) {
-            fps.isJumping = true;
-            fps.jumpVelY = PLAYER_JUMP_SPEED;
-        }
-        fps.prevSpace = jumpDown;
-
-        // Target velocity
-        let targetVX = 0, targetVZ = 0;
-        if (_pMoveDir.lengthSq() > 0) {
-            _pMoveDir.normalize();
-            targetVX = _pMoveDir.x * fps.moveSpeed;
-            targetVZ = _pMoveDir.z * fps.moveSpeed;
-        }
-
-        // Inertia lerp
-        const rate = (targetVX !== 0 || targetVZ !== 0) ? ACCEL : DECEL;
-        const t = Math.min(1, rate * dt);
-        fps.velX += (targetVX - fps.velX) * t;
-        fps.velZ += (targetVZ - fps.velZ) * t;
-
-        // Snap to zero
-        if (fps.velX * fps.velX + fps.velZ * fps.velZ < 0.01) {
-            fps.velX = 0;
-            fps.velZ = 0;
-            if (!fps.isJumping) fps.predictedPos.y = groundY + 0.05;
-            return;
-        }
-
-        // Position update with NavGrid collision
-        let newX = fps.predictedPos.x + fps.velX * dt;
-        let newZ = fps.predictedPos.z + fps.velZ * dt;
-
-        if (this._navGrid) {
-            const g = this._navGrid.worldToGrid(newX, newZ);
-            if (!this._navGrid.isWalkable(g.col, g.row)) {
-                const gX = this._navGrid.worldToGrid(newX, fps.predictedPos.z);
-                const gZ = this._navGrid.worldToGrid(fps.predictedPos.x, newZ);
-                if (this._navGrid.isWalkable(gX.col, gX.row)) {
-                    newZ = fps.predictedPos.z;
-                } else if (this._navGrid.isWalkable(gZ.col, gZ.row)) {
-                    newX = fps.predictedPos.x;
-                } else {
-                    return; // fully blocked
-                }
-            }
-        }
-
-        const newGroundY = getH(newX, newZ);
-        const slopeRise = newGroundY - fps.predictedPos.y;
-        const stepX = newX - fps.predictedPos.x;
-        const stepZ = newZ - fps.predictedPos.z;
-        const slopeRun = Math.sqrt(stepX * stepX + stepZ * stepZ);
-        const slopeAngle = slopeRun > 0.001 ? Math.atan2(slopeRise, slopeRun) : 0;
-        const maxClimbAngle = Math.PI * 0.42;
-
-        if (slopeAngle < maxClimbAngle) {
-            fps.predictedPos.x = newX;
-            fps.predictedPos.z = newZ;
-            if (!fps.isJumping) fps.predictedPos.y = newGroundY + 0.05;
-        } else if (!fps.isJumping) {
-            fps.isJumping = true;
-            fps.jumpVelY = 2.5;
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════
-    // Spectator Camera
-    // ═══════════════════════════════════════════════════════
-
-    _updateSpectatorFollow(dt) {
-        const spec = this._spectator;
-
-        if (spec.deathFreezeTimer > 0) {
-            spec.deathFreezeTimer -= dt;
-            if (spec.deathFreezeTimer <= 0) {
-                spec.targetId = null;
-                spec.initialized = false;
-            }
-            return;
-        }
-
-        const aliveIds = this.entityRenderer.getAliveEntityIds();
-        if (aliveIds.length === 0) return;
-
-        if (spec.targetId !== null) {
-            const state = this.entityRenderer.getEntityState(spec.targetId);
-            if (!state) {
-                spec.deathFreezeTimer = 1.0;
-                this.hud.hidePlayingHUD();
-                if (spec.lastScoped) {
-                    spec.lastScoped = false;
-                    this.camera.fov = 75;
-                    this.camera.updateProjectionMatrix();
-                }
-                return;
-            }
-        }
-
-        if (spec.targetId === null || !aliveIds.includes(spec.targetId)) {
-            spec.targetIndex = spec.targetIndex % aliveIds.length;
-            spec.targetId = aliveIds[spec.targetIndex];
-            spec.initialized = false;
-            this.hud.resetCache();
-            if (spec.lastScoped) {
-                spec.lastScoped = false;
-                this.camera.fov = 75;
-                this.camera.updateProjectionMatrix();
-            }
-        }
-
-        const state = this.entityRenderer.getEntityState(spec.targetId);
-        if (!state) return;
-
-        // Eye position: use localToWorld so helicopter tilt is applied automatically
-        const entry = this.entityRenderer.entities.get(spec.targetId);
-        _headLocal.set(0, 1.6, 0);
-        entry.mesh.updateWorldMatrix(true, false);
-        entry.mesh.localToWorld(_headLocal);
-        const headPos = _headLocal;
-
-        // Yaw/pitch: for vehicle occupants, convert heli-local aim to world space
-        let yaw = state.yaw;
-        let pitch = state.pitch;
-        if (entry._inVehicle) {
-            const cp = Math.cos(pitch);
-            _aimDirVec.set(
-                -Math.sin(yaw) * cp,
-                Math.sin(pitch),
-                -Math.cos(yaw) * cp
-            );
-            _aimDirVec.applyQuaternion(entry.mesh.quaternion);
-            yaw = Math.atan2(-_aimDirVec.x, -_aimDirVec.z);
-            const hd = Math.sqrt(_aimDirVec.x * _aimDirVec.x + _aimDirVec.z * _aimDirVec.z);
-            pitch = Math.atan2(_aimDirVec.y, hd);
-        }
-
-        if (!spec.initialized) {
-            spec.lerpYaw = yaw;
-            spec.lerpPitch = pitch;
-            spec.initialized = true;
-        } else {
-            const t = Math.min(1, 0.25 * 60 * dt);
-            let yawDiff = yaw - spec.lerpYaw;
-            if (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
-            if (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-            spec.lerpYaw += yawDiff * t;
-            spec.lerpPitch += (pitch - spec.lerpPitch) * t;
-        }
-
-        this.camera.position.copy(headPos);
-        _euler.set(spec.lerpPitch, spec.lerpYaw, 0, 'YXZ');
-        this.camera.quaternion.setFromEuler(_euler);
-
-        // Show target info in spectator HUD
-        const teamPrefix = state.team === 'teamA' ? 'A' : 'B';
-        const displayName = this.scoreboard.playerNames.get(spec.targetId) || `${teamPrefix}-${spec.targetId}`;
-        const def = WeaponDefs[entry.weaponId];
-        const roleName = def ? def.name : '';
-        this.spectatorHUD.updateTarget(
-            displayName, roleName, state.team,
-            state.hp, 100
-        );
-
-        // Show health + ammo HUDs for spectated entity
-        this.hud.healthHUD.style.display = 'block';
-        this.hud.ammoHUD.style.display = 'block';
-
-        // Scope vignette + FOV for spectated entity
-        const isScoped = entry.isScoped && def && def.scopeFOV;
-        if (isScoped !== spec.lastScoped) {
-            spec.lastScoped = isScoped;
-            if (this.hud.scopeVignette)
-                this.hud.scopeVignette.style.display = isScoped ? 'block' : 'none';
-            this.camera.fov = isScoped ? def.scopeFOV : 75;
-            this.camera.updateProjectionMatrix();
-            if (this.hud.crosshair)
-                this.hud.crosshair.style.display = isScoped ? 'none' : 'block';
-        }
-    }
-
-    _updateSpectatorOverhead(dt) {
-        const spec = this._spectator;
-
-        const speed = spec.panSpeed * dt;
-        if (this.input.isKeyDown('KeyW')) spec.overheadPos.z -= speed;
-        if (this.input.isKeyDown('KeyS')) spec.overheadPos.z += speed;
-        if (this.input.isKeyDown('KeyA')) spec.overheadPos.x -= speed;
-        if (this.input.isKeyDown('KeyD')) spec.overheadPos.x += speed;
-
-        const scroll = this.input.consumeScrollDelta();
-        if (scroll !== 0) {
-            spec.overheadZoom += scroll * 0.1;
-            spec.overheadZoom = Math.max(15, Math.min(200, spec.overheadZoom));
-        }
-
-        const tiltAngle = Math.PI / 3;
-        const camY = spec.overheadZoom * Math.sin(tiltAngle);
-        const camZOffset = spec.overheadZoom * Math.cos(tiltAngle);
-
-        this.camera.position.set(
-            spec.overheadPos.x,
-            camY,
-            spec.overheadPos.z + camZOffset
-        );
-        this.camera.rotation.set(-tiltAngle, 0, 0);
-    }
-
-    _nextTarget() {
-        const aliveIds = this.entityRenderer.getAliveEntityIds();
-        if (aliveIds.length === 0) return;
-        this._spectator.deathFreezeTimer = 0;
-        this._spectator.targetIndex = (this._spectator.targetIndex + 1) % aliveIds.length;
-        this._spectator.targetId = aliveIds[this._spectator.targetIndex];
-        this._spectator.initialized = false;
-        this.hud.resetCache();
-    }
-
-    _toggleView() {
-        const spec = this._spectator;
-        if (spec.mode === 'follow') {
-            spec.mode = 'overhead';
-            spec.overheadPos.set(
-                this.camera.position.x,
-                spec.overheadZoom,
-                this.camera.position.z
-            );
-            this.spectatorHUD.setOverheadMode();
-            this.hud.hidePlayingHUD();
-            if (spec.lastScoped) {
-                spec.lastScoped = false;
-                this.camera.fov = 75;
-                this.camera.updateProjectionMatrix();
-            }
-        } else {
-            spec.mode = 'follow';
-            spec.initialized = false;
-            spec.deathFreezeTimer = 0;
-            this.spectatorHUD.setFollowMode();
-            this.hud.resetCache();
-        }
     }
 
     _leaveGame() {
@@ -2002,10 +1349,10 @@ export class ClientGame {
         if (this.gameMode === 'spectator') {
             switch (e.code) {
                 case 'KeyQ':
-                    this._nextTarget();
+                    this.spectatorController.nextTarget(this._spectator, this.entityRenderer, this.hud);
                     break;
                 case 'KeyV':
-                    this._toggleView();
+                    this.spectatorController.toggleView(this._spectator, this.camera, this.hud, this.spectatorHUD);
                     break;
                 case 'KeyJ':
                 case 'Enter':
