@@ -94,6 +94,10 @@ export class ServerAIManager {
         this._scanWorker = null;
         this._scanPending = false;
 
+        // Pending lost contacts (for confirmClear callback)
+        this._pendingLostA = [];
+        this._pendingLostB = [];
+
         this._spawned = false;
         this.players = new Map();
     }
@@ -233,6 +237,21 @@ export class ServerAIManager {
             if (data.type === 'scanResult') {
                 this._applyTeamResults(this.teamA.controllers, this._teamAEnemies, data.teamAResults);
                 this._applyTeamResults(this.teamB.controllers, this._teamBEnemies, data.teamBResults);
+
+                // Process cleared lost contacts
+                if (data.clearedA) {
+                    for (const idx of data.clearedA) {
+                        const contact = this._pendingLostA[idx];
+                        if (contact) this.intelA.confirmClear(contact.enemy);
+                    }
+                }
+                if (data.clearedB) {
+                    for (const idx of data.clearedB) {
+                        const contact = this._pendingLostB[idx];
+                        if (contact) this.intelB.confirmClear(contact.enemy);
+                    }
+                }
+
                 this._scanPending = false;
             }
         });
@@ -282,20 +301,65 @@ export class ServerAIManager {
         return { aiData, enData };
     }
 
+    _buildThreatData(teamIntel) {
+        const THREAT_DECAY_TIME = 15;
+        const visible = [];
+        const lost = [];
+        for (const contact of teamIntel.contacts.values()) {
+            const pos = contact.lastSeenPos;
+            if (contact.status === 'visible') {
+                visible.push({ x: pos.x, y: pos.y, z: pos.z });
+            } else {
+                const conf = Math.max(0, 1.0 - contact.lastSeenTime / THREAT_DECAY_TIME);
+                if (conf <= 0) continue;
+                lost.push({ x: pos.x, y: pos.y, z: pos.z, confidence: conf });
+            }
+        }
+        return { visible, lost };
+    }
+
+    _packLostContacts(teamIntel) {
+        const contacts = [];
+        for (const contact of teamIntel.contacts.values()) {
+            if (contact.status === 'visible') continue;
+            contacts.push(contact);
+        }
+        const data = new Float32Array(contacts.length * 3);
+        for (let i = 0; i < contacts.length; i++) {
+            const pos = contacts[i].lastSeenPos;
+            data[i * 3]     = pos.x;
+            data[i * 3 + 1] = pos.y;
+            data[i * 3 + 2] = pos.z;
+        }
+        return { data, contacts };
+    }
+
     _dispatchScan(teamAEnemies, teamBEnemies) {
         if (!this._scanWorker || this._scanPending) return;
 
         const a = this._packTeam(this.teamA.controllers, teamAEnemies);
         const b = this._packTeam(this.teamB.controllers, teamBEnemies);
 
+        // Pack lost contacts for clearing checks
+        const lostA = this._packLostContacts(this.intelA);
+        const lostB = this._packLostContacts(this.intelB);
+        this._pendingLostA = lostA.contacts;
+        this._pendingLostB = lostB.contacts;
+
         this._scanPending = true;
+        const transfers = [a.aiData.buffer, a.enData.buffer, b.aiData.buffer, b.enData.buffer];
+        if (lostA.data.length > 0) transfers.push(lostA.data.buffer);
+        if (lostB.data.length > 0) transfers.push(lostB.data.buffer);
+
         this._scanWorker.postMessage({
             type: 'scan',
             aiAData: a.aiData, enAData: a.enData,
             aiACount: this.teamA.controllers.length, enACount: teamAEnemies.length,
             aiBData: b.aiData, enBData: b.enData,
             aiBCount: this.teamB.controllers.length, enBCount: teamBEnemies.length,
-        }, [a.aiData.buffer, a.enData.buffer, b.aiData.buffer, b.enData.buffer]);
+            lostAData: lostA.data, lostACount: lostA.contacts.length,
+            lostBData: lostB.data, lostBCount: lostB.contacts.length,
+        }, transfers);
     }
 
     _applyTeamResults(controllers, enemies, results) {
@@ -360,12 +424,13 @@ export class ServerAIManager {
         const spawnTeam = (teamData, team) => {
             const spawnFlag = team === 'teamA' ? this.flags[0] : this.flags[this.flags.length - 1];
             const threatMap = team === 'teamA' ? this.threatMapA : this.threatMapB;
+            const enemies = team === 'teamA' ? this._teamAEnemies : this._teamBEnemies;
             for (const soldier of teamData.soldiers) {
                 const angle = Math.random() * Math.PI * 2;
                 const dist = 5 + Math.random() * 10;
                 const cx = spawnFlag.position.x + Math.cos(angle) * dist;
                 const cz = spawnFlag.position.z + Math.sin(angle) * dist;
-                const safe = this._findSafeCell(cx, cz, threatMap, 30);
+                const safe = this._findSafeCell(cx, cz, threatMap, 30, null, enemies);
                 if (safe) {
                     soldier.body.position.set(safe.x, safe.y + 1, safe.z);
                 } else {
@@ -474,8 +539,10 @@ export class ServerAIManager {
             }
         }
 
-        this.threatMapA.update(dt, teamAEnemies);
-        this.threatMapB.update(dt, teamBEnemies);
+        const srcA = this._buildThreatData(this.intelA);
+        this.threatMapA.update(dt, srcA.visible, srcA.lost);
+        const srcB = this._buildThreatData(this.intelB);
+        this.threatMapB.update(dt, srcB.visible, srcB.lost);
 
         // Staggered updates
         const updatesPerFrame = AI_UPDATES_PER_TICK;
@@ -512,12 +579,17 @@ export class ServerAIManager {
         this._handleRespawns(allB, 'teamB');
     }
 
-    _findSafeCell(centerX, centerZ, threatMap, searchRadius = 30, teamIntel = null) {
+    _findSafeCell(centerX, centerZ, threatMap, searchRadius = 30, teamIntel = null, enemies = null) {
         if (!this._navGrid) return null;
         const nav = this._navGrid;
         const g = nav.worldToGrid(centerX, centerZ);
         const maxThreat = 0.3;
         const intelMinDist = 30;
+        const EYE_HEIGHT = 1.5;
+        const HEAD_TOP_HEIGHT = 1.7;
+        const ENEMY_LOS_RANGE = 50;
+        const hg = threatMap.heightGrid;
+        const tmCols = threatMap.cols;
 
         const _isSafe = (wx, wz, h) => {
             if (h < 0.3) return false;
@@ -527,6 +599,22 @@ export class ServerAIManager {
                     const dx = wx - contact.lastSeenPos.x;
                     const dz = wz - contact.lastSeenPos.z;
                     if (dx * dx + dz * dz < intelMinDist * intelMinDist) return false;
+                }
+            }
+            // Third defense: Bresenham LOS against nearby enemies
+            if (enemies && hg) {
+                const cg = threatMap._worldToGrid(wx, wz);
+                const spawnEyeY = h + EYE_HEIGHT;
+                for (const enemy of enemies) {
+                    if (!enemy.alive) continue;
+                    const ep = enemy.getPosition();
+                    const dx = ep.x - wx, dz = ep.z - wz;
+                    if (dx * dx + dz * dz > ENEMY_LOS_RANGE * ENEMY_LOS_RANGE) continue;
+                    const eg = threatMap._worldToGrid(ep.x, ep.z);
+                    const enemyEyeY = hg[eg.row * tmCols + eg.col] + EYE_HEIGHT;
+                    if (this._bresenhamClear(hg, tmCols, eg.col, eg.row, enemyEyeY, cg.col, cg.row, spawnEyeY)) {
+                        return false; // enemy has LOS to this cell
+                    }
                 }
             }
             return true;
@@ -555,11 +643,36 @@ export class ServerAIManager {
         return null;
     }
 
+    _bresenhamClear(hg, cols, c0, r0, eyeY, c1, r1, targetY) {
+        let nc = c0, nr = r0;
+        const dc = Math.abs(c1 - c0), dr = Math.abs(r1 - r0);
+        const sc = c0 < c1 ? 1 : -1, sr = r0 < r1 ? 1 : -1;
+        let err = dc - dr;
+        const totalSteps = Math.max(dc, dr);
+        let step = 0;
+        while (true) {
+            if (!(nc === c0 && nr === r0)) {
+                if (totalSteps > 0) {
+                    const t = step / totalSteps;
+                    const expectedY = eyeY + (targetY - eyeY) * t;
+                    const cellY = hg[nr * cols + nc];
+                    if (cellY > expectedY) return false;
+                }
+            }
+            if (nc === c1 && nr === r1) return true;
+            step++;
+            const e2 = 2 * err;
+            if (e2 > -dr) { err -= dr; nc += sc; }
+            if (e2 < dc) { err += dc; nr += sr; }
+        }
+    }
+
     findSafeSpawn(team) {
         const spawnFlag = team === 'teamA' ? this.flags[0] : this.flags[this.flags.length - 1];
         const threatMap = team === 'teamA' ? this.threatMapA : this.threatMapB;
         const intel = team === 'teamA' ? this.intelA : this.intelB;
         const teamData = team === 'teamA' ? this.teamA : this.teamB;
+        const enemies = team === 'teamA' ? this._teamAEnemies : this._teamBEnemies;
 
         const anchors = [];
         const basePos = spawnFlag.position;
@@ -583,7 +696,7 @@ export class ServerAIManager {
             const dist = 5 + Math.random() * 5;
             const cx = anchor.x + Math.cos(angle) * dist;
             const cz = anchor.z + Math.sin(angle) * dist;
-            const safe = this._findSafeCell(cx, cz, threatMap, 20, intel);
+            const safe = this._findSafeCell(cx, cz, threatMap, 20, intel, enemies);
             if (safe) return new THREE.Vector3(safe.x, safe.y, safe.z);
         }
 
@@ -591,7 +704,7 @@ export class ServerAIManager {
             for (let attempt = 0; attempt < 10; attempt++) {
                 const rx = (Math.random() - 0.5) * this._navGrid.width;
                 const rz = (Math.random() - 0.5) * this._navGrid.depth;
-                const safe = this._findSafeCell(rx, rz, threatMap, 15, intel);
+                const safe = this._findSafeCell(rx, rz, threatMap, 15, intel, enemies);
                 if (safe) return new THREE.Vector3(safe.x, safe.y, safe.z);
             }
         }
@@ -609,6 +722,7 @@ export class ServerAIManager {
         const threatMap = team === 'teamA' ? this.threatMapA : this.threatMapB;
         const intel = team === 'teamA' ? this.intelA : this.intelB;
         const teamData = team === 'teamA' ? this.teamA : this.teamB;
+        const enemies = team === 'teamA' ? this._teamAEnemies : this._teamBEnemies;
 
         for (const soldier of soldiers) {
             if (!soldier.canRespawn()) continue;
@@ -636,7 +750,7 @@ export class ServerAIManager {
                 const dist = 5 + Math.random() * 5;
                 const cx = anchor.x + Math.cos(angle) * dist;
                 const cz = anchor.z + Math.sin(angle) * dist;
-                const safe = this._findSafeCell(cx, cz, threatMap, 20, intel);
+                const safe = this._findSafeCell(cx, cz, threatMap, 20, intel, enemies);
                 if (safe) {
                     spawnPoint = new THREE.Vector3(safe.x, safe.y, safe.z);
                     break;
@@ -647,7 +761,7 @@ export class ServerAIManager {
                 for (let attempt = 0; attempt < 10; attempt++) {
                     const rx = (Math.random() - 0.5) * this._navGrid.width;
                     const rz = (Math.random() - 0.5) * this._navGrid.depth;
-                    const safe = this._findSafeCell(rx, rz, threatMap, 15, intel);
+                    const safe = this._findSafeCell(rx, rz, threatMap, 15, intel, enemies);
                     if (safe) {
                         spawnPoint = new THREE.Vector3(safe.x, safe.y, safe.z);
                         break;

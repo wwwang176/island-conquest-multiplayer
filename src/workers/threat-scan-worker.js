@@ -139,6 +139,52 @@ function scanTeam(aiData, aiCount, enData, enCount) {
     return results;
 }
 
+/**
+ * Scan lost contacts: for each lost contact position, check if any alive enemy
+ * from the opposing team has LOS to that position. If no enemy has LOS, the
+ * contact is "cleared" and can be removed faster.
+ * @param {Float32Array} lostData - packed x,y,z per lost contact (stride 3)
+ * @param {number} lostCount - number of lost contacts
+ * @param {Float32Array} aiData - AI team data (stride AI_STRIDE)
+ * @param {number} aiCount - number of AIs on the team that owns these contacts
+ * @returns {number[]} indices of cleared contacts
+ */
+function scanLostContacts(lostData, lostCount, aiData, aiCount) {
+    const cleared = [];
+    const LOST_STRIDE = 3;
+
+    for (let li = 0; li < lostCount; li++) {
+        const lo = li * LOST_STRIDE;
+        const lx = lostData[lo], ly = lostData[lo + 1], lz = lostData[lo + 2];
+        const lGrid = _worldToGrid(lx, lz);
+        const lTerrainY = heightGrid ? heightGrid[lGrid.row * cols + lGrid.col] : ly;
+        const lTargetY = Math.max(lTerrainY, ly);
+
+        let seen = false;
+        for (let a = 0; a < aiCount; a++) {
+            const ao = a * AI_STRIDE;
+            const flags = aiData[ao + 7];
+            if ((flags & 1) === 0) continue; // not alive
+            const inHeli = (flags & 2) !== 0;
+
+            const ax = aiData[ao], ay = aiData[ao + 1], az = aiData[ao + 2];
+            const dx = lx - ax, dz = lz - az;
+            const dist2 = dx * dx + dz * dz;
+            if (dist2 > 80 * 80) continue; // beyond scan range
+
+            const aGrid = _worldToGrid(ax, az);
+            const aEyeY = inHeli
+                ? ay + EYE_HEIGHT
+                : heightGrid[aGrid.row * cols + aGrid.col] + EYE_HEIGHT;
+
+            const losLevel = _hasGridLOS(aGrid.col, aGrid.row, aEyeY, lGrid.col, lGrid.row, lTargetY);
+            if (losLevel > 0) { seen = true; break; }
+        }
+        if (!seen) cleared.push(li);
+    }
+    return cleared;
+}
+
 self.onmessage = (e) => {
     const msg = e.data;
 
@@ -155,6 +201,15 @@ self.onmessage = (e) => {
     if (msg.type === 'scan') {
         const teamAResults = scanTeam(msg.aiAData, msg.aiACount, msg.enAData, msg.enACount);
         const teamBResults = scanTeam(msg.aiBData, msg.aiBCount, msg.enBData, msg.enBCount);
-        self.postMessage({ type: 'scanResult', teamAResults, teamBResults });
+
+        // Scan lost contacts: team A's lost contacts checked against team A's AIs
+        const clearedA = msg.lostAData && msg.lostACount > 0
+            ? scanLostContacts(msg.lostAData, msg.lostACount, msg.aiAData, msg.aiACount)
+            : null;
+        const clearedB = msg.lostBData && msg.lostBCount > 0
+            ? scanLostContacts(msg.lostBData, msg.lostBCount, msg.aiBData, msg.aiBCount)
+            : null;
+
+        self.postMessage({ type: 'scanResult', teamAResults, teamBResults, clearedA, clearedB });
     }
 };

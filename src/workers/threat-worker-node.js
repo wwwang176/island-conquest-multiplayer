@@ -1,6 +1,7 @@
 /**
  * Node.js worker_threads version of threat-worker.js.
  * Computes threat grid off main thread.
+ * Threat is split into visible (full LOS radiating) and lost (confidence-based radiating).
  */
 import { parentPort } from 'worker_threads';
 
@@ -23,44 +24,55 @@ parentPort.on('message', (msg) => {
     }
 
     if (msg.type === 'update') {
-        const enemies = msg.enemies; // [{x, z}, ...]
-        computeThreat(enemies);
+        const visible = msg.visible || [];
+        const lost = msg.lost || [];
+        computeThreat(visible, lost);
         // Post threat back (copy, don't transfer — we reuse the buffer)
         parentPort.postMessage({ type: 'result', threat: threat.slice() });
     }
 });
 
-function computeThreat(enemies) {
+function computeThreat(visible, lost) {
     threat.fill(0);
 
-    for (const enemy of enemies) {
-        const eCol = Math.max(0, Math.min(Math.floor((enemy.x - originX) / cellSize), cols - 1));
-        const eRow = Math.max(0, Math.min(Math.floor((enemy.z - originZ) / cellSize), rows - 1));
-        // Use actual Y position if above terrain (e.g. helicopter passengers)
-        const terrainEyeY = heightGrid[eRow * cols + eCol] + EYE_HEIGHT;
-        const actualEyeY = (enemy.y !== undefined) ? enemy.y + EYE_HEIGHT : terrainEyeY;
-        const enemyEyeY = Math.max(terrainEyeY, actualEyeY);
+    // Visible enemies: full LOS-based radiating threat
+    for (const src of visible) {
+        radiate(src, 1.0);
+    }
 
-        const radius = 160;
-        const radius2 = radius * radius;
-        const minCol = Math.max(0, eCol - radius);
-        const maxCol = Math.min(cols - 1, eCol + radius);
-        const minRow = Math.max(0, eRow - radius);
-        const maxRow = Math.min(rows - 1, eRow + radius);
+    // Lost contacts: confidence-scaled radiating threat
+    for (const src of lost) {
+        radiate(src, src.confidence);
+    }
+}
 
-        for (let r = minRow; r <= maxRow; r++) {
-            for (let c = minCol; c <= maxCol; c++) {
-                const dc = c - eCol;
-                const dr = r - eRow;
-                const dist2 = dc * dc + dr * dr;
-                if (dist2 > radius2) continue;
+function radiate(src, conf) {
+    const eCol = Math.max(0, Math.min(Math.floor((src.x - originX) / cellSize), cols - 1));
+    const eRow = Math.max(0, Math.min(Math.floor((src.z - originZ) / cellSize), rows - 1));
+    // Use actual Y position if above terrain (e.g. helicopter passengers)
+    const terrainEyeY = heightGrid[eRow * cols + eCol] + EYE_HEIGHT;
+    const actualEyeY = (src.y !== undefined) ? src.y + EYE_HEIGHT : terrainEyeY;
+    const enemyEyeY = Math.max(terrainEyeY, actualEyeY);
 
-                if (!hasLOS(eCol, eRow, enemyEyeY, c, r)) continue;
+    const radius = 160;
+    const radius2 = radius * radius;
+    const minCol = Math.max(0, eCol - radius);
+    const maxCol = Math.min(cols - 1, eCol + radius);
+    const minRow = Math.max(0, eRow - radius);
+    const maxRow = Math.min(rows - 1, eRow + radius);
 
-                const dy = enemyEyeY - (heightGrid[r * cols + c] + EYE_HEIGHT);
-                const dist3Dsq = dist2 * cellSize * cellSize + dy * dy;
-                threat[r * cols + c] += 1 / (1 + dist3Dsq * 0.001);
-            }
+    for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+            const dc = c - eCol;
+            const dr = r - eRow;
+            const dist2 = dc * dc + dr * dr;
+            if (dist2 > radius2) continue;
+
+            if (!hasLOS(eCol, eRow, enemyEyeY, c, r)) continue;
+
+            const dy = enemyEyeY - (heightGrid[r * cols + c] + EYE_HEIGHT);
+            const dist3Dsq = dist2 * cellSize * cellSize + dy * dy;
+            threat[r * cols + c] += conf / (1 + dist3Dsq * 0.001);
         }
     }
 }

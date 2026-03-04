@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 
 const _gridResult = { col: 0, row: 0 };
-const _enemyData = [];
 
 /**
  * Spatial threat evaluation grid.
  * Same resolution as NavGrid (300×120, 1m cells) for accurate LOS shadow casting.
  * Heavy computation (Bresenham LOS for every cell) runs in a Web Worker.
+ * Threat is split into visible (full LOS radiating) and lost (confidence-based radiating).
  */
 export class ThreatMap {
     constructor(width = 300, depth = 120, cols = 300, rows = 120) {
@@ -114,32 +114,20 @@ export class ThreatMap {
 
     // ───── Core ─────
 
-    update(dt, enemies) {
+    /**
+     * @param {number} dt
+     * @param {Array<{x,y,z}>} visible - currently visible enemy positions
+     * @param {Array<{x,y,z,confidence}>} lost - lost contact positions with confidence
+     */
+    update(dt, visible, lost) {
         this._timer += dt;
         if (this._timer < this._interval) return;
         if (this._workerBusy) return; // skip if worker still computing
         if (!this._worker) return;
         this._timer = 0;
 
-        // Extract enemy positions (reuse pooled objects for worker)
-        let count = 0;
-        for (const enemy of enemies) {
-            if (!enemy.alive) continue;
-            const pos = enemy.getPosition();
-            let entry = _enemyData[count];
-            if (!entry) {
-                entry = { x: 0, y: 0, z: 0 };
-                _enemyData[count] = entry;
-            }
-            entry.x = pos.x;
-            entry.y = pos.y;
-            entry.z = pos.z;
-            count++;
-        }
-        _enemyData.length = count;
-
         this._workerBusy = true;
-        this._worker.postMessage({ type: 'update', enemies: _enemyData });
+        this._worker.postMessage({ type: 'update', visible, lost });
     }
 
     /**
