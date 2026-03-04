@@ -156,6 +156,18 @@ export class TeamIntel {
     }
 
     /**
+     * Confirm that a lost contact's position is clear (no enemy there).
+     * Accelerates decay so the contact fades faster.
+     */
+    confirmClear(enemy) {
+        const contact = this.contacts.get(enemy);
+        if (!contact) return;
+        if (contact.status === ContactStatus.VISIBLE) return;
+        contact.lastSeenTime = Math.max(contact.lastSeenTime, DECAY_START);
+        contact.status = ContactStatus.SUSPECTED;
+    }
+
+    /**
      * Update decay: advance timers, transition statuses, prune old contacts.
      */
     update(dt) {
