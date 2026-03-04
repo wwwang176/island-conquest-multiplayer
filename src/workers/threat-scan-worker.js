@@ -140,48 +140,59 @@ function scanTeam(aiData, aiCount, enData, enCount) {
 }
 
 /**
- * Scan lost contacts: for each lost contact position, check if any alive enemy
- * from the opposing team has LOS to that position. If no enemy has LOS, the
- * contact is "cleared" and can be removed faster.
- * @param {Float32Array} lostData - packed x,y,z per lost contact (stride 3)
- * @param {number} lostCount - number of lost contacts
- * @param {Float32Array} aiData - AI team data (stride AI_STRIDE)
- * @param {number} aiCount - number of AIs on the team that owns these contacts
- * @returns {number[]} indices of cleared contacts
+ * Check if any friendly AI has LOS to LOST contact positions.
+ * Returns array of indices into lostData that are confirmed clear.
+ * lostData stride = 3: x, y, z.
  */
-function scanLostContacts(lostData, lostCount, aiData, aiCount) {
-    const cleared = [];
+function scanLostContacts(aiData, aiCount, lostData, lostCount) {
     const LOST_STRIDE = 3;
+    const cleared = [];
 
     for (let li = 0; li < lostCount; li++) {
         const lo = li * LOST_STRIDE;
         const lx = lostData[lo], ly = lostData[lo + 1], lz = lostData[lo + 2];
         const lGrid = _worldToGrid(lx, lz);
         const lTerrainY = heightGrid ? heightGrid[lGrid.row * cols + lGrid.col] : ly;
-        const lTargetY = Math.max(lTerrainY, ly);
 
-        let seen = false;
+        let anySees = false;
         for (let a = 0; a < aiCount; a++) {
             const ao = a * AI_STRIDE;
             const flags = aiData[ao + 7];
             if ((flags & 1) === 0) continue; // not alive
-            const inHeli = (flags & 2) !== 0;
 
             const ax = aiData[ao], ay = aiData[ao + 1], az = aiData[ao + 2];
+            const facingX = aiData[ao + 3], facingZ = aiData[ao + 5];
+            const inHeli = (flags & 2) !== 0;
+
             const dx = lx - ax, dz = lz - az;
-            const dist2 = dx * dx + dz * dz;
-            if (dist2 > 80 * 80) continue; // beyond scan range
+            const dist2d = Math.sqrt(dx * dx + dz * dz);
+            if (dist2d > 80) continue; // beyond reasonable scan range
 
-            const aGrid = _worldToGrid(ax, az);
-            const aEyeY = inHeli
-                ? ay + EYE_HEIGHT
-                : heightGrid[aGrid.row * cols + aGrid.col] + EYE_HEIGHT;
+            // FOV check (120°, horizontal only) — skip for helicopter
+            if (!inHeli && dist2d > 0.001) {
+                const inv = 1 / dist2d;
+                const dot2d = facingX * (dx * inv) + facingZ * (dz * inv);
+                if (dot2d < -0.2) continue;
+            }
 
-            const losLevel = _hasGridLOS(aGrid.col, aGrid.row, aEyeY, lGrid.col, lGrid.row, lTargetY);
-            if (losLevel > 0) { seen = true; break; }
+            // LOS check
+            if (!inHeli && heightGrid) {
+                const aiGrid = _worldToGrid(ax, az);
+                const aiEyeY = heightGrid[aiGrid.row * cols + aiGrid.col] + EYE_HEIGHT;
+                const losLevel = _hasGridLOS(
+                    aiGrid.col, aiGrid.row, aiEyeY,
+                    lGrid.col, lGrid.row, lTerrainY
+                );
+                if (losLevel === 0) continue;
+            }
+
+            anySees = true;
+            break;
         }
-        if (!seen) cleared.push(li);
+
+        if (anySees) cleared.push(li);
     }
+
     return cleared;
 }
 
@@ -202,13 +213,9 @@ self.onmessage = (e) => {
         const teamAResults = scanTeam(msg.aiAData, msg.aiACount, msg.enAData, msg.enACount);
         const teamBResults = scanTeam(msg.aiBData, msg.aiBCount, msg.enBData, msg.enBCount);
 
-        // Scan lost contacts: team A's lost contacts checked against team A's AIs
-        const clearedA = msg.lostAData && msg.lostACount > 0
-            ? scanLostContacts(msg.lostAData, msg.lostACount, msg.aiAData, msg.aiACount)
-            : null;
-        const clearedB = msg.lostBData && msg.lostBCount > 0
-            ? scanLostContacts(msg.lostBData, msg.lostBCount, msg.aiBData, msg.aiBCount)
-            : null;
+        // Check LOST contact positions — see if any friendly AI has LOS to them
+        const clearedA = msg.lostAData ? scanLostContacts(msg.aiAData, msg.aiACount, msg.lostAData, msg.lostACount) : [];
+        const clearedB = msg.lostBData ? scanLostContacts(msg.aiBData, msg.aiBCount, msg.lostBData, msg.lostBCount) : [];
 
         self.postMessage({ type: 'scanResult', teamAResults, teamBResults, clearedA, clearedB });
     }

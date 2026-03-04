@@ -424,13 +424,12 @@ export class ServerAIManager {
         const spawnTeam = (teamData, team) => {
             const spawnFlag = team === 'teamA' ? this.flags[0] : this.flags[this.flags.length - 1];
             const threatMap = team === 'teamA' ? this.threatMapA : this.threatMapB;
-            const enemies = team === 'teamA' ? this._teamAEnemies : this._teamBEnemies;
             for (const soldier of teamData.soldiers) {
                 const angle = Math.random() * Math.PI * 2;
                 const dist = 5 + Math.random() * 10;
                 const cx = spawnFlag.position.x + Math.cos(angle) * dist;
                 const cz = spawnFlag.position.z + Math.sin(angle) * dist;
-                const safe = this._findSafeCell(cx, cz, threatMap, 30, null, enemies);
+                const safe = this._findSafeCell(cx, cz, threatMap, 30);
                 if (safe) {
                     soldier.body.position.set(safe.x, safe.y + 1, safe.z);
                 } else {
@@ -584,12 +583,18 @@ export class ServerAIManager {
         const nav = this._navGrid;
         const g = nav.worldToGrid(centerX, centerZ);
         const maxThreat = 0.3;
-        const intelMinDist = 30;
+        const intelMinDist = 30; // reject cells within 30m of any intel contact
+
+        // LOS check constants (match threat-scan-worker)
         const EYE_HEIGHT = 1.5;
         const HEAD_TOP_HEIGHT = 1.7;
-        const ENEMY_LOS_RANGE = 50;
+        const ENEMY_LOS_RANGE = 50; // only check enemies within 50m
         const hg = threatMap.heightGrid;
         const tmCols = threatMap.cols;
+        const tmRows = threatMap.rows;
+        const tmCellSize = threatMap.cellSize;
+        const tmOriginX = threatMap.originX;
+        const tmOriginZ = threatMap.originZ;
 
         const _isSafe = (wx, wz, h) => {
             if (h < 0.3) return false;
@@ -601,19 +606,22 @@ export class ServerAIManager {
                     if (dx * dx + dz * dz < intelMinDist * intelMinDist) return false;
                 }
             }
-            // Third defense: Bresenham LOS against nearby enemies
+            // Third line of defense: would any enemy see us here?
             if (enemies && hg) {
-                const cg = threatMap._worldToGrid(wx, wz);
-                const spawnEyeY = h + EYE_HEIGHT;
+                const spawnCol = Math.max(0, Math.min(Math.floor((wx - tmOriginX) / tmCellSize), tmCols - 1));
+                const spawnRow = Math.max(0, Math.min(Math.floor((wz - tmOriginZ) / tmCellSize), tmRows - 1));
+                const spawnTopY = h + HEAD_TOP_HEIGHT;
                 for (const enemy of enemies) {
                     if (!enemy.alive) continue;
                     const ep = enemy.getPosition();
-                    const dx = ep.x - wx, dz = ep.z - wz;
-                    if (dx * dx + dz * dz > ENEMY_LOS_RANGE * ENEMY_LOS_RANGE) continue;
-                    const eg = threatMap._worldToGrid(ep.x, ep.z);
-                    const enemyEyeY = hg[eg.row * tmCols + eg.col] + EYE_HEIGHT;
-                    if (this._bresenhamClear(hg, tmCols, eg.col, eg.row, enemyEyeY, cg.col, cg.row, spawnEyeY)) {
-                        return false; // enemy has LOS to this cell
+                    const dx = wx - ep.x, dz = wz - ep.z;
+                    const dist2 = dx * dx + dz * dz;
+                    if (dist2 > ENEMY_LOS_RANGE * ENEMY_LOS_RANGE) continue;
+                    const eCol = Math.max(0, Math.min(Math.floor((ep.x - tmOriginX) / tmCellSize), tmCols - 1));
+                    const eRow = Math.max(0, Math.min(Math.floor((ep.z - tmOriginZ) / tmCellSize), tmRows - 1));
+                    const eEyeY = Math.max(hg[eRow * tmCols + eCol] + EYE_HEIGHT, ep.y + EYE_HEIGHT);
+                    if (this._bresenhamClear(hg, tmCols, eCol, eRow, eEyeY, spawnCol, spawnRow, spawnTopY)) {
+                        return false; // enemy can see our head — not safe
                     }
                 }
             }
@@ -643,6 +651,7 @@ export class ServerAIManager {
         return null;
     }
 
+    /** Bresenham LOS: returns true if ray from eyeY to targetY is unblocked by terrain. */
     _bresenhamClear(hg, cols, c0, r0, eyeY, c1, r1, targetY) {
         let nc = c0, nr = r0;
         const dc = Math.abs(c1 - c0), dr = Math.abs(r1 - r0);
@@ -651,13 +660,10 @@ export class ServerAIManager {
         const totalSteps = Math.max(dc, dr);
         let step = 0;
         while (true) {
-            if (!(nc === c0 && nr === r0)) {
-                if (totalSteps > 0) {
-                    const t = step / totalSteps;
-                    const expectedY = eyeY + (targetY - eyeY) * t;
-                    const cellY = hg[nr * cols + nc];
-                    if (cellY > expectedY) return false;
-                }
+            if (!(nc === c0 && nr === r0) && totalSteps > 0) {
+                const t = step / totalSteps;
+                const expectedY = eyeY + (targetY - eyeY) * t;
+                if (hg[nr * cols + nc] > expectedY) return false;
             }
             if (nc === c1 && nr === r1) return true;
             step++;

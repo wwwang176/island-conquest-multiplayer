@@ -1,7 +1,15 @@
 /**
  * Web Worker for ThreatMap computation.
  * Receives heightGrid + enemy positions, computes threat grid off main thread.
- * Threat is split into visible (full LOS radiating) and lost (confidence-based radiating).
+ *
+ * Threat sources are split into:
+ *   - visible: VISIBLE contacts (always applied, full confidence)
+ *   - lost:    LOST/SUSPECTED contacts (confidence decays over time)
+ *
+ * LOST threat is NOT masked by friendly coverage — threat represents
+ * "can be shot from enemy position", not "enemy is here". Friendly
+ * scan clearing (confirmClear in scan-worker) handles source-level
+ * decay acceleration instead.
  */
 
 const EYE_HEIGHT = 1.5;
@@ -25,9 +33,7 @@ self.onmessage = (e) => {
     }
 
     if (msg.type === 'update') {
-        const visible = msg.visible || [];
-        const lost = msg.lost || [];
-        computeThreat(visible, lost);
+        computeThreat(msg.visible || [], msg.lost || []);
         // Post threat back (copy, don't transfer — we reuse the buffer)
         self.postMessage({ type: 'result', threat: threat.slice() });
     }
@@ -36,18 +42,25 @@ self.onmessage = (e) => {
 function computeThreat(visible, lost) {
     threat.fill(0);
 
-    // Visible enemies: full LOS-based radiating threat
+    // 1) Radiate threat from VISIBLE contacts (always applied)
     for (const src of visible) {
         radiate(src, 1.0);
     }
 
-    // Lost contacts: confidence-scaled radiating threat
+    // 2) Radiate threat from LOST contacts (confidence-weighted, time-decayed)
     for (const src of lost) {
         radiate(src, src.confidence);
     }
 }
 
+/**
+ * Radiate threat from a single source position.
+ * @param {{x,y,z}} src — world position
+ * @param {number} conf — confidence multiplier (0-1)
+ */
 function radiate(src, conf) {
+    if (conf <= 0) return;
+
     const eCol = Math.max(0, Math.min(Math.floor((src.x - originX) / cellSize), cols - 1));
     const eRow = Math.max(0, Math.min(Math.floor((src.z - originZ) / cellSize), rows - 1));
     // Use actual Y position if above terrain (e.g. helicopter passengers)
