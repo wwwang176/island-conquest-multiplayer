@@ -692,7 +692,7 @@ export class ServerHelicopter {
         this.passengers = [];
 
         this.mesh.position.copy(this.spawnPosition);
-        this.mesh.position.y = this.spawnPosition.y + 1.1;
+        this.mesh.position.y = this.spawnPosition.y + 1.32;
         this.mesh.rotation.set(0, this.rotationY, 0);
         this._attitudeGroup.rotation.set(0, 0, 0);
 
