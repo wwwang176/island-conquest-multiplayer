@@ -299,9 +299,9 @@ export class ServerSoldier {
         this.hp = 0;
         this.deathTimer = this.respawnDelay;
 
-        // Exit vehicle
+        // Exit vehicle — pass died=true so driver death can promote a passenger
         if (this.vehicle) {
-            this.vehicle.exit(this);
+            this.vehicle.exit(this, true);
             this.vehicle = null;
             if (this.controller) {
                 this.controller.vehicle = null;

@@ -207,6 +207,7 @@ export class ClientGame {
             fpReloadTilt: 0,
             isReloading: false,
             isBolting: false,
+            sideBlocked: false,
             // Scope
             isScoped: false,
             prevRightMouse: false,
@@ -320,6 +321,27 @@ export class ClientGame {
         if (fps.fpGunGroup) fps.fpGunGroup.visible = true;
         if (this.hud.scopeVignette) this.hud.scopeVignette.style.display = 'none';
         if (this.hud.crosshair) this.hud.crosshair.style.display = 'block';
+    }
+
+    _updateSideBlocked(fps) {
+        fps.sideBlocked = false;
+        if (fps.vehicleId === 0xFF) return;
+        const vEntry = this.vehicleRenderer.vehicles.get(fps.vehicleId);
+        if (!vEntry) return;
+        // Only passengers, not pilot
+        if (vEntry.pilotId === fps.myEntityId) return;
+        let slotIdx = -1;
+        for (let i = 0; i < vEntry.passengerIds.length; i++) {
+            if (vEntry.passengerIds[i] === fps.myEntityId) { slotIdx = i; break; }
+        }
+        if (slotIdx < 0) return;
+        const isLeftSeat = slotIdx % 2 === 0;
+        const aimDir = new THREE.Vector3(0, 0, -1);
+        aimDir.applyEuler(new THREE.Euler(fps.pitch, fps.yaw, 0, 'YXZ'));
+        const rY = vEntry.targetYaw ?? 0;
+        const cross = Math.sin(rY) * aimDir.z - Math.cos(rY) * aimDir.x;
+        const deadZone = 0.174; // sin(10°)
+        fps.sideBlocked = isLeftSeat ? cross < deadZone : cross > -deadZone;
     }
 
     _joinGame(team, weaponId, playerName) {
@@ -1097,6 +1119,8 @@ export class ClientGame {
 
         // Camera mode
         if (this.gameMode === 'playing') {
+            // Compute sideBlocked for helicopter passengers (used by FPSController for gun tilt)
+            this._updateSideBlocked(this._fps);
             this.fpsController.update(dt, this._fps, this.input, this.camera, this.network, this.island, this._navGrid, this.hud);
             if (this._fps.vehicleId !== 0xFF) this.vehicleController.updateCamera(this._fps, this.vehicleRenderer, this.camera);
         } else if (this.gameMode === 'dead') {
