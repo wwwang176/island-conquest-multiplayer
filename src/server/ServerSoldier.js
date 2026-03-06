@@ -265,6 +265,9 @@ export class ServerSoldier {
     takeDamage(amount, fromPosition, hitY = null, attacker = null) {
         if (!this.alive) return { killed: false, damage: 0, headshot: false };
 
+        // AI-to-player damage reduction for game balance
+        if (attacker && !attacker.isPlayer && this.isPlayer) amount *= 0.5;
+
         const baseY = this.body.position.y;
         const { actualDamage, headshot } = computeHitDamage(amount, hitY, baseY);
         this.hp = Math.max(0, this.hp - actualDamage);
