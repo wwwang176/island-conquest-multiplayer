@@ -262,18 +262,18 @@ export class VehicleRenderer {
             allowSleep: false,
         });
 
-        // 3-box compound shape — mirrors ServerHelicopter.initPhysicsBody
+        // 3-box compound shape — mirrors ServerHelicopter.initPhysicsBody (×1.2)
         body.addShape(
-            new CANNON.Box(new CANNON.Vec3(0.9, 0.7, 2.5)),
-            new CANNON.Vec3(0, -0.15, 0)
+            new CANNON.Box(new CANNON.Vec3(1.08, 0.84, 3.0)),
+            new CANNON.Vec3(0, -0.18, 0)
         );
         body.addShape(
-            new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)),
-            new CANNON.Vec3(0, -0.2, 2.8)
+            new CANNON.Box(new CANNON.Vec3(0.6, 0.6, 0.6)),
+            new CANNON.Vec3(0, -0.24, 3.36)
         );
         body.addShape(
-            new CANNON.Box(new CANNON.Vec3(0.2, 0.2, 1.8)),
-            new CANNON.Vec3(0, 0.1, -3.2)
+            new CANNON.Box(new CANNON.Vec3(0.24, 0.24, 2.16)),
+            new CANNON.Vec3(0, 0.12, -3.84)
         );
 
         // Position from event data
@@ -455,12 +455,12 @@ export class VehicleRenderer {
             alive: true,
             crashing: false,
             team: null,
-            hp: 6000,
+            hp: 12000,
             pilotId: 0xFFFF,
-            passengerIds: [0xFFFF, 0xFFFF, 0xFFFF],
+            passengerIds: [0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF],
             targetX: 0, targetY: 0, targetZ: 0,
             targetYaw: 0, targetPitch: 0, targetRoll: 0,
-            enterRadius: 3,
+            enterRadius: 3.6,
             crashBody: null,
             crashTimer: 0,
             crashFinished: false,
