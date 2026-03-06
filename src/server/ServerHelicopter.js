@@ -10,13 +10,13 @@ const _cannonYAxis = new CANNON.Vec3(0, 1, 0);
 const _euler = new THREE.Euler();
 const _threeQuat = new THREE.Quaternion();
 
-export const HELI_PILOT_OFFSET = { x: 0, y: -1.15, z: 1.4 };
+export const HELI_PILOT_OFFSET = { x: 0, y: -1.08, z: 1.78 };
 
 export const HELI_PASSENGER_SLOTS = [
-    { x: -0.75, y: -1.2, z:  0.2, facingOffset:  Math.PI / 2 },
-    { x:  0.75, y: -1.2, z:  0.2, facingOffset: -Math.PI / 2 },
-    { x: -0.75, y: -1.2, z: -0.7, facingOffset:  Math.PI / 2 },
-    { x:  0.75, y: -1.2, z: -0.7, facingOffset: -Math.PI / 2 },
+    { x: -0.90, y: -1.20, z:  0.24, facingOffset:  Math.PI / 2 },
+    { x:  0.90, y: -1.20, z:  0.24, facingOffset: -Math.PI / 2 },
+    { x: -0.90, y: -1.20, z: -0.84, facingOffset:  Math.PI / 2 },
+    { x:  0.90, y: -1.20, z: -0.84, facingOffset: -Math.PI / 2 },
 ];
 
 /**
@@ -31,7 +31,7 @@ export class ServerHelicopter {
         this.team = null;     // neutral until first occupant boards
 
         // Health
-        this.maxHP = 6000;
+        this.maxHP = 12000;
         this.hp = this.maxHP;
         this.alive = true;
 
@@ -39,7 +39,7 @@ export class ServerHelicopter {
         this.driver = null;
         this.passengers = [];
         this.maxPassengers = 4;
-        this.enterRadius = 3;
+        this.enterRadius = 3.6;
 
         // AI perception
         this.detectionRange = 120;
@@ -102,7 +102,7 @@ export class ServerHelicopter {
         this.mesh.userData.vehicle = this;
         this.mesh.userData.surfaceType = 'rock';
         this.mesh.position.copy(spawnPosition);
-        this.mesh.position.y = spawnPosition.y + 1.1;
+        this.mesh.position.y = spawnPosition.y + 1.32;
 
         // Attitude sub-group inside mesh (used for pitch/roll on collision mesh)
         // _attitudeGroup is created in _createCollisionMesh
@@ -124,17 +124,20 @@ export class ServerHelicopter {
             allowSleep: false,
         });
 
+        // Main fuselage box (cabin + nose area) — original ×1.2
         this.body.addShape(
-            new CANNON.Box(new CANNON.Vec3(0.9, 0.7, 2.5)),
-            new CANNON.Vec3(0, -0.15, 0)
+            new CANNON.Box(new CANNON.Vec3(1.08, 0.84, 3.0)),
+            new CANNON.Vec3(0, -0.18, 0)
         );
+        // Nose cone — original ×1.2
         this.body.addShape(
-            new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5)),
-            new CANNON.Vec3(0, -0.2, 2.8)
+            new CANNON.Box(new CANNON.Vec3(0.6, 0.6, 0.6)),
+            new CANNON.Vec3(0, -0.24, 3.36)
         );
+        // Tail boom — original ×1.2
         this.body.addShape(
-            new CANNON.Box(new CANNON.Vec3(0.2, 0.2, 1.8)),
-            new CANNON.Vec3(0, 0.1, -3.2)
+            new CANNON.Box(new CANNON.Vec3(0.24, 0.24, 2.16)),
+            new CANNON.Vec3(0, 0.12, -3.84)
         );
 
         this._syncBody();
@@ -166,16 +169,21 @@ export class ServerHelicopter {
         const odGeos = [];
         const dkGeos = [];
 
-        // Cabin
-        odGeos.push(place(new THREE.BoxGeometry(1.8, 0.12, 2.6), 0, -0.55, 0));
-        odGeos.push(place(new THREE.BoxGeometry(1.8, 0.12, 2.6), 0, 0.65, 0));
-        odGeos.push(place(new THREE.BoxGeometry(1.8, 1.2, 0.12), 0, 0.05, 1.3));
-        odGeos.push(place(new THREE.BoxGeometry(0.08, 1.2, 0.08), -0.9, 0.05, -1.25));
-        odGeos.push(place(new THREE.BoxGeometry(0.08, 1.2, 0.08), 0.9, 0.05, -1.25));
+        // Cabin — original ×1.2
+        odGeos.push(place(new THREE.BoxGeometry(2.16, 0.144, 3.12), 0, -0.66, 0));
+        odGeos.push(place(new THREE.BoxGeometry(2.16, 0.144, 3.12), 0, 0.78, 0));
+        odGeos.push(place(new THREE.BoxGeometry(2.16, 1.44, 0.144), 0, 0.06, 1.56));
+
+        // Cockpit bulkhead (half-height, protects pilot lower body)
+        odGeos.push(place(new THREE.BoxGeometry(2.16, 0.72, 0.144), 0, -0.30, -1.56));
+
+        // Door-frame pillars — original ×1.2
+        odGeos.push(place(new THREE.BoxGeometry(0.096, 1.44, 0.096), -1.08, 0.06, -1.50));
+        odGeos.push(place(new THREE.BoxGeometry(0.096, 1.44, 0.096), 1.08, 0.06, -1.50));
 
         // Nose frame bars
-        const noseLen = 1.5;
-        const noseCZ = -2.05;
+        const noseLen = 1.8;
+        const noseCZ = -2.46;
         const TAPER = 0.4;
         const edgeStrip = (stripW, h, centerY, xPos) => {
             const geo = new THREE.BoxGeometry(stripW, h, noseLen);
@@ -195,26 +203,26 @@ export class ServerHelicopter {
             geo.computeVertexNormals();
             return geo;
         };
-        odGeos.push(place(edgeStrip(0.10, 0.10, 0.0, -0.90), 0, 0.0, noseCZ));
-        odGeos.push(place(edgeStrip(0.10, 0.10, 0.0,  0.90), 0, 0.0, noseCZ));
-        const frontW = 1.7 * (1 - TAPER);
-        odGeos.push(place(new THREE.BoxGeometry(frontW, 0.10, 0.10), 0, 0.0, -2.80));
-        odGeos.push(place(new THREE.BoxGeometry(0.10, 0.29, 0.10), 0, -0.145, -2.80));
-        const kbGeo = new THREE.BoxGeometry(0.15, 0.06, noseLen);
-        kbGeo.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.atan2(0.196, noseLen)));
-        odGeos.push(place(kbGeo, 0, -0.442, noseCZ));
+        odGeos.push(place(edgeStrip(0.12, 0.12, 0.0, -1.08), 0, 0.0, noseCZ));
+        odGeos.push(place(edgeStrip(0.12, 0.12, 0.0,  1.08), 0, 0.0, noseCZ));
+        const frontW = 2.04 * (1 - TAPER);
+        odGeos.push(place(new THREE.BoxGeometry(frontW, 0.12, 0.12), 0, 0.0, -3.36));
+        odGeos.push(place(new THREE.BoxGeometry(0.12, 0.348, 0.12), 0, -0.174, -3.36));
+        const kbGeo = new THREE.BoxGeometry(0.18, 0.072, noseLen);
+        kbGeo.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.atan2(0.235, noseLen)));
+        odGeos.push(place(kbGeo, 0, -0.530, noseCZ));
 
-        // Tail + fin + stabilizer + mast
-        odGeos.push(place(new THREE.BoxGeometry(0.35, 0.35, 3.5), 0, 0.1, 3.2));
-        odGeos.push(place(new THREE.BoxGeometry(0.1, 1.0, 0.7), 0, 0.7, 4.9));
-        odGeos.push(place(new THREE.BoxGeometry(1.4, 0.08, 0.5), 0, 0.15, 4.9));
-        odGeos.push(place(new THREE.CylinderGeometry(0.06, 0.06, 0.35, 6), 0, 0.8, 0));
+        // Tail + fin + stabilizer + mast — original ×1.2
+        odGeos.push(place(new THREE.BoxGeometry(0.42, 0.42, 4.2), 0, 0.12, 3.84));
+        odGeos.push(place(new THREE.BoxGeometry(0.12, 1.2, 0.84), 0, 0.84, 5.88));
+        odGeos.push(place(new THREE.BoxGeometry(1.68, 0.096, 0.6), 0, 0.18, 5.88));
+        odGeos.push(place(new THREE.CylinderGeometry(0.072, 0.072, 0.42, 6), 0, 0.96, 0));
 
-        // Landing skids
+        // Landing skids — original ×1.2
         for (const side of [-1, 1]) {
-            dkGeos.push(place(new THREE.BoxGeometry(0.08, 0.08, 3.0), side * 0.95, -1.0, -0.2));
-            for (const zOff of [-0.8, 0.6]) {
-                dkGeos.push(place(new THREE.BoxGeometry(0.06, 0.45, 0.06), side * 0.95, -0.75, zOff));
+            dkGeos.push(place(new THREE.BoxGeometry(0.096, 0.096, 3.6), side * 1.14, -1.2, -0.24));
+            for (const zOff of [-0.96, 0.72]) {
+                dkGeos.push(place(new THREE.BoxGeometry(0.072, 0.54, 0.072), side * 1.14, -0.90, zOff));
             }
         }
 
@@ -224,14 +232,14 @@ export class ServerHelicopter {
         const dkMerged = mergeGeometries(dkGeos);
         this._attitudeGroup.add(new THREE.Mesh(dkMerged, mat(0x333333)));
 
-        // Team stripe
-        const stripeGeo = new THREE.BoxGeometry(0.36, 0.36, 0.8);
-        place(stripeGeo, 0, 0.1, 4.0);
+        // Team stripe — original ×1.2
+        const stripeGeo = new THREE.BoxGeometry(0.432, 0.432, 0.96);
+        place(stripeGeo, 0, 0.12, 4.8);
         this._attitudeGroup.add(new THREE.Mesh(stripeGeo, mat(0x888888)));
 
-        // Nose glass (truncated pyramid)
+        // Nose glass (truncated pyramid) — original ×1.2
         const halfLen = noseLen / 2;
-        const bx = 0.9, bTop = 0.59, bBot = -0.49;
+        const bx = 1.08, bTop = 0.708, bBot = -0.588;
         const fx = bx * (1 - TAPER);
         const fTop = bTop * (1 - TAPER);
         const fBot = bBot * (1 - TAPER);
@@ -318,7 +326,13 @@ export class ServerHelicopter {
     enter(entity) {
         if (!this.driver) {
             this.driver = entity;
+            entity.seatIndex = -1; // pilot
         } else {
+            // Assign first available seat slot
+            const taken = new Set(this.passengers.map(p => p.seatIndex));
+            let slot = 0;
+            while (taken.has(slot)) slot++;
+            entity.seatIndex = slot;
             this.passengers.push(entity);
         }
         entity.vehicle = this;
@@ -329,14 +343,18 @@ export class ServerHelicopter {
         this._waterIdleTimer = 0;
     }
 
-    exit(entity) {
+    exit(entity, died = false) {
         entity.vehicle = null;
+        entity.seatIndex = undefined;
         if (entity.body) entity.body.collisionResponse = true;
 
         if (this.driver === entity) {
             this.driver = null;
-            if (this.passengers.length > 0) {
-                this.driver = this.passengers.shift();
+            // Only promote a passenger to pilot when driver died
+            if (died && this.passengers.length > 0) {
+                const newPilot = this.passengers.shift();
+                newPilot.seatIndex = -1; // pilot seat
+                this.driver = newPilot;
             }
         } else {
             const idx = this.passengers.indexOf(entity);
@@ -438,6 +456,7 @@ export class ServerHelicopter {
         for (const occ of occupants) {
             if (occ.body) occ.body.collisionResponse = true;
             if (occ.vehicle !== undefined) occ.vehicle = null;
+            occ.seatIndex = undefined;
             if (occ.controller) {
                 occ.controller.vehicle = null;
                 occ.controller._vehicleMoveTarget = null;
@@ -531,7 +550,7 @@ export class ServerHelicopter {
         let floorY = this.minAltitude;
         if (this.getHeightAt) {
             this._groundY = this.getHeightAt(this.mesh.position.x, this.mesh.position.z);
-            floorY = Math.max(floorY, this._groundY + 1.1);
+            floorY = Math.max(floorY, this._groundY + 1.32);
         }
         if (this.mesh.position.y <= floorY) {
             this.mesh.position.y = floorY;
@@ -555,6 +574,8 @@ export class ServerHelicopter {
         // Sync body back + constrain to Y-only rotation
         if (this.body) {
             this.body.position.set(this.mesh.position.x, this.mesh.position.y, this.mesh.position.z);
+            // Yaw damping — always apply (air resistance)
+            this._yawRate *= Math.exp(-3 * dt);
             this.body.angularVelocity.x = 0;
             this.body.angularVelocity.z = 0;
             this.body.angularVelocity.y = this._yawRate;
@@ -624,17 +645,21 @@ export class ServerHelicopter {
             this.body.force.z -= this.body.velocity.z * excess * mass * 10;
         }
 
-        let targetYaw = 0;
-        if (input.steerLeft) targetYaw = this.turnSpeed;
-        if (input.steerRight) targetYaw = -this.turnSpeed;
-        const yawLerp = 1 - Math.exp(-5 * dt);
-        this._yawRate += (targetYaw - this._yawRate) * yawLerp;
+        // Steering — yaw with inertia (damping handled in update())
+        if (input.steerLeft || input.steerRight) {
+            let targetYaw = 0;
+            if (input.steerLeft) targetYaw = this.turnSpeed;
+            if (input.steerRight) targetYaw = -this.turnSpeed;
+            const yawAccel = 1 - Math.exp(-5 * dt);
+            this._yawRate += (targetYaw - this._yawRate) * yawAccel;
+        }
         this.rotationY += this._yawRate * dt;
 
+        // Vertical thrust (ascendScale/descendScale: 0–1, default 1)
         if (input.ascend) {
-            this.body.force.y += mass * this.vAccel;
+            this.body.force.y += mass * this.vAccel * (input.ascendScale ?? 1);
         } else if (input.descend) {
-            this.body.force.y -= mass * this.vAccel;
+            this.body.force.y -= mass * this.vAccel * (input.descendScale ?? 1);
         }
     }
 
@@ -685,6 +710,13 @@ export class ServerHelicopter {
 
     // ── Snapshot ──
 
+    _getPassengerIdBySeat(seatIdx) {
+        for (const p of this.passengers) {
+            if (p.seatIndex === seatIdx) return p._entityId;
+        }
+        return 0xFFFF;
+    }
+
     getSnapshotData() {
         const p = this.mesh.position;
         return {
@@ -698,10 +730,10 @@ export class ServerHelicopter {
             roll: this._visualRoll,
             hp: this.hp,
             pilotId: this.driver ? this.driver._entityId : 0xFFFF,
-            passenger0: this.passengers[0] ? this.passengers[0]._entityId : 0xFFFF,
-            passenger1: this.passengers[1] ? this.passengers[1]._entityId : 0xFFFF,
-            passenger2: this.passengers[2] ? this.passengers[2]._entityId : 0xFFFF,
-            passenger3: this.passengers[3] ? this.passengers[3]._entityId : 0xFFFF,
+            passenger0: this._getPassengerIdBySeat(0),
+            passenger1: this._getPassengerIdBySeat(1),
+            passenger2: this._getPassengerIdBySeat(2),
+            passenger3: this._getPassengerIdBySeat(3),
         };
     }
 }
