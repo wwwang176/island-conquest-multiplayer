@@ -215,7 +215,7 @@ export class VehicleController {
                     }
 
                     // HP progress bar
-                    const maxHP = 6000;
+                    const maxHP = 12000;
                     const hpPct = Math.round(Math.max(0, vEntry.hp / maxHP * 100));
                     if (hpPct !== this._lastVehicleHpPct) {
                         this._lastVehicleHpPct = hpPct;

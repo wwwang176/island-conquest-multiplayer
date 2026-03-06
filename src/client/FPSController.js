@@ -241,8 +241,9 @@ export class FPSController {
             // Recoil recovery
             fps.fpRecoilOffset = Math.max(0, fps.fpRecoilOffset - GunAnim.recoilRecovery * dt);
 
-            // Reload/bolt tilt
-            const targetTilt = fps.isReloading ? GunAnim.reloadTilt
+            // Reload/bolt tilt / side-blocked (helicopter blind zone)
+            const targetTilt = fps.sideBlocked ? GunAnim.reloadTilt
+                : fps.isReloading ? GunAnim.reloadTilt
                 : fps.isBolting ? GunAnim.boltTilt : 0;
             const tiltSpeed = (targetTilt > fps.fpReloadTilt) ? 12 : 8;
             fps.fpReloadTilt += (targetTilt - fps.fpReloadTilt) * Math.min(1, tiltSpeed * dt);

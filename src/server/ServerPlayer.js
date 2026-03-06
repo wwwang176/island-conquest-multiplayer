@@ -552,7 +552,7 @@ export class ServerPlayer extends ServerSoldier {
 
         // Sync body + mesh to seat BEFORE shooting (so shot origin is correct)
         if (vehicle.type === 'helicopter') {
-            const slotIdx = vehicle.passengers.indexOf(this);
+            const slotIdx = this.seatIndex >= 0 ? this.seatIndex : -1;
             if (slotIdx >= 0 && slotIdx < HELI_PASSENGER_SLOTS.length) {
                 const slot = HELI_PASSENGER_SLOTS[slotIdx];
                 vehicle.getWorldSeatPos(_tmpVec, slot);
@@ -592,7 +592,7 @@ export class ServerPlayer extends ServerSoldier {
         // Check side restriction for helicopter passengers
         let sideBlocked = false;
         if (vehicle.type === 'helicopter') {
-            const slotIdx = vehicle.passengers.indexOf(this);
+            const slotIdx = this.seatIndex >= 0 ? this.seatIndex : -1;
             if (slotIdx >= 0) {
                 const isLeftSeat = slotIdx % 2 === 0;
                 // Compute aim direction
@@ -601,7 +601,8 @@ export class ServerPlayer extends ServerSoldier {
                 _shotDir.applyEuler(_euler);
                 const rY = vehicle.rotationY;
                 const cross = Math.sin(rY) * _shotDir.z - Math.cos(rY) * _shotDir.x;
-                sideBlocked = isLeftSeat ? cross < 0 : cross > 0;
+                const deadZone = 0.174; // sin(10°) — 10° blind spot at front/rear
+                sideBlocked = isLeftSeat ? cross < deadZone : cross > -deadZone;
             }
         }
 
