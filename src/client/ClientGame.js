@@ -218,6 +218,9 @@ export class ClientGame {
             prevGrenade: false,
             // Vehicle state
             vehicleId: 0xFF,   // 0xFF = not in vehicle
+            // Input send throttle (2× server tick rate)
+            _sendTimer: 0,
+            _accumulatedKeys: 0,
         };
 
         // ── Server HUD state (written by onSnapshot/onInputAck, read by _updatePlayerHUD) ──

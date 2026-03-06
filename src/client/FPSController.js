@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { WeaponDefs, GunAnim } from '../entities/WeaponDefs.js';
-import { GRAVITY, MOVE_SPEED, ACCEL, DECEL } from '../shared/constants.js';
+import { GRAVITY, MOVE_SPEED, ACCEL, DECEL, TICK_RATE } from '../shared/constants.js';
 import { KeyBit } from '../shared/protocol.js';
+
+const INPUT_SEND_INTERVAL = 1 / (TICK_RATE * 2);  // 128Hz for 64-tick server
 
 // Reusable vectors for FPS prediction
 const _pForward = new THREE.Vector3();
@@ -221,9 +223,20 @@ export class FPSController {
         // Build key bits
         const keys = this.buildKeyBits(input);
 
-        // Send input to server
-        fps.localTick++;
-        network.sendInput(fps.localTick, keys, 0, 0, fps.yaw, fps.pitch);
+        // Accumulate keys (OR) so brief presses are never lost between sends
+        fps._accumulatedKeys |= keys;
+
+        // Throttled send: 2× server tick rate (128Hz for 64-tick server)
+        fps._sendTimer -= dt;
+        if (fps._sendTimer <= 0) {
+            fps._sendTimer += INPUT_SEND_INTERVAL;
+            // Clamp to prevent burst-sending after a long frame or tab-hidden
+            if (fps._sendTimer < 0) fps._sendTimer = 0;
+            fps.localTick++;
+            network.sendInput(fps.localTick, fps._accumulatedKeys, 0, 0, fps.yaw, fps.pitch);
+            // Reset to current frame's keys (held keys persist, released keys clear)
+            fps._accumulatedKeys = keys;
+        }
 
         const inVehicle = fps.vehicleId !== 0xFF;
 
