@@ -264,8 +264,8 @@ export class VehicleRenderer {
 
         // 3-box compound shape — mirrors ServerHelicopter.initPhysicsBody (×1.2)
         body.addShape(
-            new CANNON.Box(new CANNON.Vec3(1.08, 0.84, 3.0)),
-            new CANNON.Vec3(0, -0.18, 0)
+            new CANNON.Box(new CANNON.Vec3(1.08, 0.94, 3.0)),
+            new CANNON.Vec3(0, -0.08, 0)
         );
         body.addShape(
             new CANNON.Box(new CANNON.Vec3(0.6, 0.6, 0.6)),
