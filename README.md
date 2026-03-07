@@ -236,7 +236,11 @@ Scan parameters: 80m max range, 120° forward cone.
 ### Aiming
 
 - **Aim correction speed**: `2 + aimSkill × 3` (range 4.1–4.7)
-- **Reaction delay**: 150–250ms before engaging new targets (per personality)
+- **Reaction delay**: Base 150–250ms (per personality), dynamically scaled by four factors:
+  - **Distance**: Linear interpolation between `nearReaction` and `farReaction` over 0–60m. Rusher reacts fast up close (×0.3) but slow at range (×1.4); Sniper is the opposite (×1.4 near, ×0.5 far)
+  - **Aim angle**: Enemies near the crosshair center trigger faster reactions (×0.93); enemies at the FOV edge are slower (up to ×1.33)
+  - **Line of sight**: Head-only targets (partial cover) add 40% delay (×1.4)
+  - **Environment**: Storm/night multiplier (default ×1.0)
 - **Pre-aiming**: Aim at predicted position of lost contacts (`lastPos + velocity × 0.5s`)
 - **Head-only targets**: Aim point raised to 1.6m (head level) instead of 1.2m (chest)
 - **BOLT AI delay**: Must hold aim for 0.5s before firing
