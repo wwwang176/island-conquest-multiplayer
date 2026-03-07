@@ -2,9 +2,11 @@
 
 *[繁體中文版](README.zh-TW.md)*
 
-A single-player 3D first-person shooter running entirely in the browser. Two AI teams — 15 soldiers each, organized into 5 squads of 3 — battle over 5 flag points on a procedurally generated tropical island. You can spectate the battle or join either team to fight alongside the AI.
+A multiplayer 3D first-person shooter running in the browser. A Node.js server runs the authoritative game simulation — two AI teams of 15 soldiers each (5 squads of 3) battle over 5 flag points on a procedurally generated tropical island. Multiple players can connect via WebSocket, join either team, and fight alongside the AI. Spectators can watch the battle in real time.
 
-Built with **Three.js** + **cannon-es**, no build tools or bundlers required.
+Built with **Three.js** + **cannon-es** + **WebSocket** (`ws`). Server-authoritative with client-side prediction and snapshot interpolation.
+
+**Live Demo: https://island-conquest.wwwang.tw/**
 
 ![Spectator follow mode — tropical island battlefield](assets/screenshots/1.jpg)
 ![Hilltop battle with grenade explosion](assets/screenshots/2.jpg)
@@ -13,17 +15,21 @@ Built with **Three.js** + **cannon-es**, no build tools or bundlers required.
 
 ```bash
 npm install
+npm run build
 npm start
 ```
 
-Open `http://localhost:8080` in your browser.
+Open `http://localhost:8088` in your browser. Other players on the same network can connect using the host's LAN IP (e.g. `http://192.168.1.x:8088`).
 
 ## Tech Stack
 
-- **Three.js r0.162** — 3D rendering
-- **cannon-es 0.20** — Physics engine
-- **Native ES modules** — No bundler, importmap in index.html
-- **Web Workers** — NavGrid construction + threat map computation off main thread
+- **Node.js** — Authoritative game server
+- **ws** — WebSocket server for real-time binary protocol
+- **Three.js r0.162** — 3D rendering (client)
+- **cannon-es 0.20** — Physics engine (server)
+- **three-mesh-bvh** — BVH-accelerated raycasting (server hitscan)
+- **Vite** — Client bundling (production build into `dist/`)
+- **Web Workers** — NavGrid construction, threat map & threat scan computation off main thread
 
 ## Flags & Scoring
 
@@ -41,6 +47,8 @@ Scoring:
 - +1 point per owned flag every 3 seconds
 - First team to **500 points** wins
 - 3 flags = 60 pts/min; 5 flags = 100 pts/min
+
+After a match ends, a 30-second countdown begins before the next round starts automatically.
 
 ---
 
@@ -79,13 +87,24 @@ Scoring:
 | Right Click | Toggle scope (BOLT only) |
 | R | Reload |
 | G | Throw grenade |
+| E | Board / exit helicopter |
 | ESC | Release cursor; press again to leave team |
+
+### Helicopter Controls (Pilot)
+
+| Key | Action |
+|-----|--------|
+| W/S | Pitch forward / backward |
+| A/D | Turn left / right |
+| SPACE | Ascend |
+| SHIFT | Descend |
+| Left Click | Fire (passengers can also fire from seats) |
 
 ### Debug Overlays (All Modes)
 
 | Key | Action |
 |-----|--------|
-| TAB (hold) | Scoreboard with K/D stats |
+| TAB (hold) | Scoreboard with K/D stats and ping |
 | T | Cycle threat map overlay (off / Team A / Team B) |
 | B | Toggle NavGrid blocked cells |
 | P | Toggle A* path debug arcs |
@@ -96,11 +115,13 @@ Scoring:
 
 ## Joining the Game
 
-1. From spectator mode, press **1** (Team A) or **2** (Team B).
-2. A weapon selection screen appears — pick your weapon with **1–4**.
-3. Press **SPACE** to deploy. Your cursor will be locked for FPS control.
-4. On death, you have 5 seconds before you can choose a new weapon and respawn with **SPACE**.
-5. Press **ESC** twice (once to unlock cursor, again to confirm) to leave the team and return to spectator mode.
+1. Open the game URL and enter the server address (auto-detected for same-host).
+2. Press **Connect** — you enter spectator mode.
+3. Press **1** (Team A) or **2** (Team B).
+4. A weapon selection screen appears — pick your weapon with **1–4**.
+5. Press **SPACE** to deploy. Your cursor will be locked for FPS control.
+6. On death, you have 5 seconds before you can choose a new weapon and respawn with **SPACE**.
+7. Press **ESC** twice (once to unlock cursor, again to confirm) to leave the team and return to spectator mode.
 
 ---
 
@@ -129,6 +150,20 @@ The LMG's spread *decreases* with sustained fire — holding the trigger makes i
 ### Bolt-Action Scope
 
 Right-click toggles a scope that narrows FOV from ~75 to 20. The gun model hides while scoped, replaced by a vignette overlay. Scoping is blocked during bolt cycling and reloading.
+
+---
+
+## Vehicles
+
+### Helicopter
+
+Each team has a helicopter that spawns at their base. Seats 1 pilot + 4 passengers.
+
+- **HP**: 12,000
+- **Max speed**: 45 m/s horizontal, 8 m/s vertical
+- **Enter radius**: 3.6m — press **E** to board, **E** again to exit
+- **Pilot** controls flight (WASD + SPACE/SHIFT); passengers can fire from their seats
+- Destroyed helicopters crash with physics-based debris
 
 ---
 
@@ -187,7 +222,7 @@ Each AI runs a priority-ordered behavior tree (ticked every 0.15–0.25s, stagge
 14. **Defend owned flag** — patrol nearby
 15. **Default** — random patrol
 
-Continuous systems (aiming, shooting, movement) run every frame for all 30 soldiers, while the behavior tree and threat scanning run in staggered batches of 8 per frame for performance.
+Continuous systems (aiming, shooting, movement) run every frame for all 30 soldiers, while the behavior tree and threat scanning run in staggered batches of 8 per tick for performance.
 
 ### Line of Sight
 
@@ -204,7 +239,11 @@ Scan parameters: 80m max range, 120° forward cone.
 ### Aiming
 
 - **Aim correction speed**: `2 + aimSkill × 3` (range 4.1–4.7)
-- **Reaction delay**: 150–250ms before engaging new targets (per personality)
+- **Reaction delay**: Base 150–250ms (per personality), dynamically scaled by four factors:
+  - **Distance**: Linear interpolation between `nearReaction` and `farReaction` over 0–60m. Rusher reacts fast up close (×0.3) but slow at range (×1.4); Sniper is the opposite (×1.4 near, ×0.5 far)
+  - **Aim angle**: Enemies near the crosshair center trigger faster reactions (×0.93); enemies at the FOV edge are slower (up to ×1.33)
+  - **Line of sight**: Head-only targets (partial cover) add 40% delay (×1.4)
+  - **Environment**: Storm/night multiplier (default ×1.0)
 - **Pre-aiming**: Aim at predicted position of lost contacts (`lastPos + velocity × 0.5s`)
 - **Head-only targets**: Aim point raised to 1.6m (head level) instead of 1.2m (chest)
 - **BOLT AI delay**: Must hold aim for 0.5s before firing
@@ -295,53 +334,96 @@ Procedurally generated tropical island (300m × 120m):
 - Central ridge with elliptical island mask
 - Height-based vertex coloring (sand → grass → rock)
 - Vegetation: palm trees with shadows
-- Cover objects: rocks, sandbags, crates, walls
+- Cover objects: rocks, sandbags, crates, walls, fortifications
 
 ---
 
 ## Architecture
 
-```
-src/
-  main.js              Entry point
-  core/
-    Game.js            Main orchestrator, game loop, HUD
-    EventBus.js        Pub/sub messaging
-    InputManager.js    Keyboard/mouse input
-    SpectatorMode.js   Spectator camera controller
-  entities/
-    Soldier.js         Base entity (mesh, physics, HP)
-    Player.js          FPS player controller
-    Weapon.js          Hitscan weapon system
-    WeaponDefs.js      Weapon stat definitions
-  world/
-    Island.js          Procedural terrain + vegetation
-    CoverSystem.js     Cover point registry
-    FlagPoint.js       Flag capture mechanics
-    Noise.js           Simplex noise
-  ai/
-    AIManager.js       Team creation & staggered updates
-    AIController.js    Per-soldier behavior tree + combat
-    BehaviorTree.js    BT engine (Selector/Sequence/Condition/Action)
-    Personality.js     6 personality types + squad templates
-    SquadCoordinator.js  Squad-level tactics
-    TeamIntel.js       Shared enemy sighting board
-    ThreatMap.js       Spatial threat heatmap
-    NavGrid.js         A* pathfinding
-    TacticalActions.js Flanking, suppression, pre-aim helpers
-  systems/
-    PhysicsWorld.js    cannon-es wrapper
-    ScoreManager.js    Flag-based scoring
-    SpawnSystem.js     Respawn point selection
-  vfx/
-    TracerSystem.js    Bullet tracer lines
-    ImpactVFX.js       Hit particles
-  ui/
-    Minimap.js         Canvas-based minimap
-    KillFeed.js        Kill notifications
-    SpectatorHUD.js    Spectator UI overlay
-  workers/
-    navgrid-worker.js  Off-thread NavGrid construction
-    threat-worker.js   Off-thread threat map computation
-```
+The game uses a **client-server architecture**. The server runs the authoritative simulation (physics, AI, hit detection, flag capture) at 64 ticks/second and streams binary snapshots to all connected clients over WebSocket. Clients render the world, interpolate remote entities, and predict local player movement.
 
+```
+server.js                 Server entry — creates ServerGame + NetworkManager
+src/
+  client-main.js          Client entry — creates ClientGame instance
+  client/
+    ClientGame.js          Client orchestrator: renderer, scene, camera, HUD, input
+    NetworkClient.js       WebSocket connection + binary message handling
+    EntityRenderer.js      Interpolated rendering of remote entities
+    Interpolation.js       Snapshot interpolation logic
+    FPSController.js       First-person camera + client-side movement prediction
+    VehicleController.js   Vehicle camera + occupant positioning
+    VehicleRenderer.js     Helicopter 3D model + animation
+    SpectatorController.js Spectator camera modes (follow / bird's-eye)
+    ClientHUD.js           DOM overlay: crosshair, ammo, HP, flags
+    JoinScreen.js          Connection form + team/weapon selection UI
+    DeathScreen.js         Death / respawn screen
+    GameOverScreen.js      End-of-round screen
+    Scoreboard.js          TAB scoreboard overlay
+    WeaponCardUI.js        Weapon selection cards
+  server/
+    ServerGame.js          Authoritative game loop + simulation
+    NetworkManager.js      HTTP static server + WebSocket broadcast
+    ServerAIManager.js     Server-side AI manager (creates & updates all AI)
+    ServerSoldier.js       Server-side soldier entity (physics + HP)
+    ServerPlayer.js        Server-side player entity (input processing)
+    ServerPhysics.js       cannon-es physics world wrapper
+    ServerIsland.js        Server-side terrain + collidable generation
+    ServerHelicopter.js    Server-side helicopter simulation
+    ServerVehicleManager.js Vehicle lifecycle management
+    ServerGrenadeManager.js Grenade spawning + explosion logic
+    RateLimiter.js         Per-client rate limiting
+  shared/
+    constants.js           Tick rate, port, map size, gameplay constants
+    protocol.js            Binary message types + encode/decode helpers
+    DamageModel.js         Shared damage calculation
+    DamageFalloff.js       Range-based damage falloff curves
+    CapsuleBody.js         Capsule physics body helper
+  core/
+    EventBus.js            Pub/sub messaging
+    InputManager.js        Keyboard/mouse input + pointer lock
+  entities/
+    WeaponDefs.js          Weapon stat definitions
+    Grenade.js             Grenade entity
+    Vehicle.js             Vehicle base class
+    Helicopter.js          Helicopter flight model + seats
+  world/
+    Island.js              Procedural terrain + vegetation
+    CoverSystem.js         Cover point registry
+    FlagPoint.js           Flag capture mechanics
+    Fortification.js       Defensive structure generation
+    Noise.js               Simplex noise
+  ai/
+    AIController.js        Per-soldier behavior tree + combat
+    AIMovement.js          AI movement & pathfollowing
+    AIShooter.js           AI aiming & firing logic
+    AIGrenade.js           AI grenade usage logic
+    AIVisual.js            AI line-of-sight scanning
+    AIVehicleController.js AI helicopter piloting
+    BehaviorTree.js        BT engine (Selector/Sequence/Condition/Action)
+    Personality.js         6 personality types + squad templates
+    SquadCoordinator.js    Squad-level tactics
+    TeamIntel.js           Shared enemy sighting board
+    ThreatMap.js           Spatial threat heatmap
+    NavGrid.js             A* pathfinding
+    TacticalActions.js     Flanking, suppression, pre-aim helpers
+  systems/
+    SpawnSystem.js         Respawn point selection
+  vfx/
+    TracerSystem.js        Bullet tracer lines
+    ImpactVFX.js           Hit particles
+    StormVFX.js            Weather effects
+  ui/
+    Minimap.js             Canvas-based minimap
+    KillFeed.js            Kill notifications
+    SpectatorHUD.js        Spectator UI overlay
+  workers/
+    navgrid-worker.js      Off-thread NavGrid construction (browser)
+    navgrid-worker-node.js Off-thread NavGrid construction (Node.js)
+    pathfind-worker.js     Off-thread A* pathfinding (browser)
+    pathfind-worker-node.js Off-thread A* pathfinding (Node.js)
+    threat-worker.js       Off-thread threat map computation (browser)
+    threat-worker-node.js  Off-thread threat map computation (Node.js)
+    threat-scan-worker.js  Off-thread threat scanning (browser)
+    threat-scan-worker-node.js Off-thread threat scanning (Node.js)
+```

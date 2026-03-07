@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import { existsSync } from 'fs';
 import { networkInterfaces } from 'os';
 import { ServerGame } from './src/server/ServerGame.js';
 import { NetworkManager } from './src/server/NetworkManager.js';
@@ -13,9 +14,11 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 // ── Resolve project root for static file serving ──
+// Prefer dist/ (Vite build output) when available, fall back to project root.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const staticRoot = resolve(__dirname);
+const distDir = resolve(__dirname, 'dist');
+const staticRoot = existsSync(distDir) ? distDir : resolve(__dirname);
 
 // ── Generate a deterministic seed (or use env) ──
 const seed = process.env.SEED ? parseFloat(process.env.SEED) : Math.random() * 65536;
