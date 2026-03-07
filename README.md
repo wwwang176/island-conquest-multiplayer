@@ -6,6 +6,8 @@ A multiplayer 3D first-person shooter running in the browser. A Node.js server r
 
 Built with **Three.js** + **cannon-es** + **WebSocket** (`ws`). Server-authoritative with client-side prediction and snapshot interpolation.
 
+**Live Demo: https://island-conquest.wwwang.tw/**
+
 ![Spectator follow mode — tropical island battlefield](assets/screenshots/1.jpg)
 ![Hilltop battle with grenade explosion](assets/screenshots/2.jpg)
 

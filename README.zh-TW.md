@@ -6,6 +6,8 @@
 
 使用 **Three.js** + **cannon-es** + **WebSocket** (`ws`) 構建。伺服器權威架構，搭配客戶端預測與快照插值。
 
+**線上 Demo：https://island-conquest.wwwang.tw/**
+
 ![觀戰跟隨模式 — 熱帶島嶼戰場](assets/screenshots/1.jpg)
 ![山頂激戰與手榴彈爆炸](assets/screenshots/2.jpg)
 
