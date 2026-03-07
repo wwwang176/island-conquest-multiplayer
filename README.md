@@ -15,6 +15,7 @@ Built with **Three.js** + **cannon-es** + **WebSocket** (`ws`). Server-authorita
 
 ```bash
 npm install
+npm run build
 npm start
 ```
 
@@ -27,7 +28,7 @@ Open `http://localhost:8088` in your browser. Other players on the same network 
 - **Three.js r0.162** — 3D rendering (client)
 - **cannon-es 0.20** — Physics engine (server)
 - **three-mesh-bvh** — BVH-accelerated raycasting (server hitscan)
-- **Native ES modules** — No bundler; client uses importmap in index.html
+- **Vite** — Client bundling (production build into `dist/`)
 - **Web Workers** — NavGrid construction, threat map & threat scan computation off main thread
 
 ## Flags & Scoring

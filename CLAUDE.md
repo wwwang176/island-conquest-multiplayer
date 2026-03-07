@@ -8,11 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development
 
-Uses native ES modules. The server requires Node.js with dependencies managed via npm (`ws`, `three`, `cannon-es`, `three-mesh-bvh`). The client uses an importmap in `index.html` (Three.js r0.162, cannon-es 0.20 from CDN).
+Uses native ES modules. The server requires Node.js with dependencies managed via npm (`ws`, `three`, `cannon-es`, `three-mesh-bvh`). The client is bundled with Vite (`npm run build` produces `dist/`).
 
 **Run locally:**
 ```
 npm install
+npm run build
 npm start
 ```
 Then open `http://localhost:8080`.
