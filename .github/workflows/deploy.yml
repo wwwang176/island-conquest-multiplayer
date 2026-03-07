@@ -16,5 +16,7 @@ jobs:
           ssh -i ~/.ssh/key -p 2222 -o StrictHostKeyChecking=no root@${{ secrets.HETZNER_HOST }} '
             cd /opt/game &&
             git pull origin online-demo &&
+            npm install &&
+            npm run build &&
             systemctl restart island-conquest
           '
