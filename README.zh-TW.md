@@ -15,6 +15,7 @@
 
 ```bash
 npm install
+npm run build
 npm start
 ```
 
@@ -27,7 +28,7 @@ npm start
 - **Three.js r0.162** — 3D 渲染（客戶端）
 - **cannon-es 0.20** — 物理引擎（伺服器端）
 - **three-mesh-bvh** — BVH 加速射線檢測（伺服器端命中掃描）
-- **原生 ES 模組** — 無打包工具；客戶端使用 index.html 中的 importmap
+- **Vite** — 客戶端打包（production build 輸出至 `dist/`）
 - **Web Workers** — NavGrid 建構、威脅地圖與威脅掃描計算在背景執行緒進行
 
 ## 旗點 & 計分

@@ -5,7 +5,7 @@
  *
  * Runs in a module Worker — imports Three.js directly from CDN.
  */
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js';
+import * as THREE from 'three';
 
 self.onmessage = (e) => {
     const {

@@ -1,4 +1,5 @@
 node_modules/
+dist/
 nul
 plan*.md
 TODO.md
