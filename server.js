@@ -47,14 +47,17 @@ function getLanIP() {
 }
 
 const lanIP = getLanIP();
+const port = parseInt(process.env.PORT, 10) || HTTP_PORT;
+const proto = process.env.SSL_CERT ? 'https' : 'http';
+const wsProto = process.env.SSL_CERT ? 'wss' : 'ws';
 console.log('');
 console.log('═══════════════════════════════════════════');
 console.log('  Island Conquest — LAN Multiplayer Server');
 console.log('═══════════════════════════════════════════');
 console.log(`  Seed:      ${seed.toFixed(2)}`);
-console.log(`  Local:     http://localhost:${HTTP_PORT}`);
-console.log(`  LAN:       http://${lanIP}:${HTTP_PORT}`);
-console.log(`  WebSocket: ws://${lanIP}:${HTTP_PORT}`);
+console.log(`  Local:     ${proto}://localhost:${port}`);
+console.log(`  LAN:       ${proto}://${lanIP}:${port}`);
+console.log(`  WebSocket: ${wsProto}://${lanIP}:${port}`);
 console.log('═══════════════════════════════════════════');
 console.log('');
 
