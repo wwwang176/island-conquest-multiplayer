@@ -1,6 +1,7 @@
-import { createServer } from 'http';
+import { createServer as createHTTP } from 'http';
+import { createServer as createHTTPS } from 'https';
 import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join, extname } from 'path';
 import { WebSocketServer } from 'ws';
 import { MsgType, MSG_MIN_SIZE, decodeInput, decodeJoin, decodeRespawn, decodePing, encodePong, encodeWorldSeed, encodePlayerJoined, encodePlayerLeft } from '../shared/protocol.js';
@@ -38,8 +39,18 @@ export class NetworkManager {
         this.clients = new Map();
         this._nextClientId = 1;
 
-        // HTTP server for static files
-        this.httpServer = createServer((req, res) => this._handleHTTP(req, res));
+        // HTTP or HTTPS server for static files
+        const sslCert = process.env.SSL_CERT;
+        const sslKey = process.env.SSL_KEY;
+        if (sslCert && sslKey && existsSync(sslCert) && existsSync(sslKey)) {
+            const opts = { cert: readFileSync(sslCert), key: readFileSync(sslKey) };
+            this.httpServer = createHTTPS(opts, (req, res) => this._handleHTTP(req, res));
+            this._useSSL = true;
+            console.log('[SSL] HTTPS enabled');
+        } else {
+            this.httpServer = createHTTP((req, res) => this._handleHTTP(req, res));
+            this._useSSL = false;
+        }
 
         // WebSocket server
         this.wss = new WebSocketServer({ noServer: true });
@@ -55,10 +66,23 @@ export class NetworkManager {
     }
 
     start() {
-        this.httpServer.listen(HTTP_PORT, () => {
-            console.log(`[HTTP] Static file server on http://localhost:${HTTP_PORT}`);
+        const port = parseInt(process.env.PORT, 10) || HTTP_PORT;
+        const proto = this._useSSL ? 'https' : 'http';
+        const wsProto = this._useSSL ? 'wss' : 'ws';
+        this.httpServer.listen(port, () => {
+            console.log(`[HTTP] Static file server on ${proto}://localhost:${port}`);
         });
-        console.log(`[WS]   WebSocket server on ws://localhost:${HTTP_PORT} (upgrade)`);
+        console.log(`[WS]   WebSocket server on ${wsProto}://localhost:${port} (upgrade)`);
+
+        // Redirect HTTP → HTTPS when SSL is enabled
+        if (this._useSSL) {
+            createHTTP((req, res) => {
+                res.writeHead(301, { Location: `https://${req.headers.host}${req.url}` });
+                res.end();
+            }).listen(80, () => {
+                console.log('[HTTP] Redirecting port 80 → HTTPS');
+            });
+        }
     }
 
     // ── HTTP Static File Handler ──
