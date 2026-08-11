@@ -250,7 +250,8 @@ export class TouchControls {
     display: none;
     flex-direction: column; align-items: center; justify-content: center;
     gap: 14px;
-    background: #000;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
     color: rgba(255,255,255,0.9);
     font-family: Arial, sans-serif; text-align: center;
     pointer-events: auto;
