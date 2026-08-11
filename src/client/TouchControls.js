@@ -79,8 +79,62 @@ export class TouchControls {
 
         this._injectStyle();
         this._buildDOM();
+        this._buildRotatePrompt();
         this._decorateVehiclePrompt();
         this._bindEvents();
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // Fullscreen + orientation
+    //
+    // Both are touch-only concerns: the layer itself only exists on touch
+    // devices, so the desktop path never reaches any of this. Fullscreen must
+    // be requested synchronously inside a user gesture, which is why the checks
+    // hang off button presses rather than a timer.
+    // ═══════════════════════════════════════════════════════
+
+    _isPortrait() {
+        return window.innerHeight > window.innerWidth;
+    }
+
+    /** Ask for fullscreen + landscape. Safe to call repeatedly. */
+    _enterPresentation() {
+        if (!document.fullscreenElement) {
+            const el = document.documentElement;
+            const req = el.requestFullscreen || el.webkitRequestFullscreen;
+            // iOS Safari has no element fullscreen — the rotate prompt is the
+            // only backstop there, so a rejection is expected, not an error.
+            try {
+                const p = req?.call(el, { navigationUI: 'hide' });
+                if (p?.then) p.then(() => this._lockLandscape()).catch(() => {});
+            } catch { /* no-op */ }
+        }
+        this._lockLandscape();
+        this._updateRotatePrompt();
+    }
+
+    _lockLandscape() {
+        try {
+            const p = screen.orientation?.lock?.('landscape');
+            if (p?.catch) p.catch(() => {});   // unsupported on iOS, and on desktop Firefox
+        } catch { /* no-op */ }
+    }
+
+    _buildRotatePrompt() {
+        const el = document.createElement('div');
+        el.id = 'touch-rotate-prompt';
+        el.innerHTML = `
+            <div class="trp-icon">⟳</div>
+            <div class="trp-title">請將裝置轉為橫向</div>
+            <div class="trp-sub">Rotate your device to landscape</div>`;
+        document.body.appendChild(el);
+        this.rotatePrompt = el;
+        this._updateRotatePrompt();
+    }
+
+    _updateRotatePrompt() {
+        if (!this.rotatePrompt) return;
+        this.rotatePrompt.style.display = this._isPortrait() ? 'flex' : 'none';
     }
 
     // ═══════════════════════════════════════════════════════
@@ -188,6 +242,31 @@ export class TouchControls {
 #touch-controls .tb-spec-next { left: calc(28px + env(safe-area-inset-left)); }
 #touch-controls .tb-spec-view { left: calc(140px + env(safe-area-inset-left)); }
 #touch-controls .tb-spec-join { right: calc(28px + env(safe-area-inset-right)); }
+
+/* ── Rotate-to-landscape prompt ──
+   Above the join panel (200) but below the game-over screen (1000). */
+#touch-rotate-prompt {
+    position: fixed; inset: 0; z-index: 500;
+    display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px;
+    background: #000;
+    color: rgba(255,255,255,0.9);
+    font-family: Arial, sans-serif; text-align: center;
+    pointer-events: auto;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+#touch-rotate-prompt .trp-icon {
+    font-size: 56px; line-height: 1;
+    animation: trp-spin 2.4s ease-in-out infinite;
+}
+#touch-rotate-prompt .trp-title { font-size: 19px; font-weight: bold; }
+#touch-rotate-prompt .trp-sub { font-size: 13px; color: rgba(255,255,255,0.5); }
+@keyframes trp-spin {
+    0%, 45% { transform: rotate(0deg); }
+    55%, 100% { transform: rotate(90deg); }
+}
 
 /* ── Repositioned game HUD (touch only) ── */
 /* Both readouts become centred horizontal strips at the bottom of the screen:
@@ -386,6 +465,12 @@ export class TouchControls {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) this._releaseAll();
         });
+
+        // Keep the rotate prompt live rather than only refreshing it on a press.
+        this._onOrientation = () => this._updateRotatePrompt();
+        window.addEventListener('resize', this._onOrientation);
+        window.addEventListener('orientationchange', this._onOrientation);
+        document.addEventListener('fullscreenchange', this._onOrientation);
     }
 
     _onPointerDown(e) {
@@ -566,6 +651,12 @@ export class TouchControls {
         const def = btn._tbDef;
         btn.classList.add('tb-active');
 
+        // JOIN is the entry point into the game, so that press is what claims
+        // fullscreen + landscape. Every in-game press re-checks, because the
+        // user can drop out of fullscreen at any time (back gesture, notification
+        // shade) and only a gesture can get it back.
+        if (def.id === 'spec-join' || this.lookEnabled) this._enterPresentation();
+
         if (def.onDown) def.onDown();
         if (def.mode === 'hold') {
             this._setInput(def, true);
@@ -672,7 +763,11 @@ export class TouchControls {
         window.removeEventListener('pointerup', this._onPointerUp);
         window.removeEventListener('pointercancel', this._onPointerUp);
         window.removeEventListener('blur', this._releaseAll);
+        window.removeEventListener('resize', this._onOrientation);
+        window.removeEventListener('orientationchange', this._onOrientation);
+        document.removeEventListener('fullscreenchange', this._onOrientation);
         this.root.remove();
+        this.rotatePrompt?.remove();
         document.getElementById('touch-controls-style')?.remove();
     }
 }
