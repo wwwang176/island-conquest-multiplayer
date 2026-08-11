@@ -144,9 +144,19 @@ export class SpectatorController {
         if (input.isKeyDown('KeyA')) spec.overheadPos.x -= speed;
         if (input.isKeyDown('KeyD')) spec.overheadPos.x += speed;
 
+        // Touch: one finger drags the map, two fingers pinch to zoom.
+        // Pan is scaled by zoom so the ground tracks the finger at any altitude.
+        const pan = input.consumePanDelta();
+        if (pan.x !== 0 || pan.y !== 0) {
+            const k = spec.overheadZoom * 0.0035;
+            spec.overheadPos.x -= pan.x * k;
+            spec.overheadPos.z -= pan.y * k * 1.15;  // camera is tilted, so screen-Y covers more ground
+        }
+
+        const pinch = input.consumePinchDelta();
         const scroll = input.consumeScrollDelta();
-        if (scroll !== 0) {
-            spec.overheadZoom += scroll * 0.1;
+        if (scroll !== 0 || pinch !== 0) {
+            spec.overheadZoom += scroll * 0.1 - pinch * 0.5;
             spec.overheadZoom = Math.max(15, Math.min(200, spec.overheadZoom));
         }
 

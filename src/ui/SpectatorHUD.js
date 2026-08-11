@@ -24,6 +24,7 @@ export class SpectatorHUD {
 
         // Target info (follow mode)
         const info = document.createElement('div');
+        info.id = 'spectator-target';
         info.style.cssText = `position:absolute;bottom:100px;left:50%;transform:translateX(-50%);
             color:white;font-size:14px;text-align:center;
             background:rgba(0,0,0,0.5);padding:8px 18px;border-radius:5px;`;
@@ -32,6 +33,7 @@ export class SpectatorHUD {
 
         // Control hints
         const hints = document.createElement('div');
+        hints.id = 'spectator-hints';
         hints.style.cssText = `position:absolute;bottom:40px;left:50%;transform:translateX(-50%);
             color:rgba(255,255,255,0.5);font-size:12px;text-align:center;`;
         hints.innerHTML = '[Q] Next &nbsp; [V] View &nbsp; [J/Enter] Join &nbsp; [ESC] Leave';
