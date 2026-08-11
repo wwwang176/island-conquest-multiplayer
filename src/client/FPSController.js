@@ -212,9 +212,11 @@ export class FPSController {
         }
 
         // ── Mouse look (with scope sensitivity) ──
-        if (input.isPointerLocked) {
+        // Touch mode has no pointer lock — TouchControls feeds mouseDelta directly.
+        if (input.isPointerLocked || input.touchMode) {
             const { dx, dy } = input.consumeMouseDelta();
-            const sens = fps.isScoped ? fps.mouseSensitivity * 0.5 : fps.mouseSensitivity;
+            const scopeMult = input.touchMode ? 0.35 : 0.5;
+            const sens = fps.isScoped ? fps.mouseSensitivity * scopeMult : fps.mouseSensitivity;
             fps.yaw -= dx * sens;
             fps.pitch -= dy * sens;
             fps.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, fps.pitch));
