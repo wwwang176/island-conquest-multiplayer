@@ -26,6 +26,7 @@ import { GameOverScreen } from './GameOverScreen.js';
 import { FPSController } from './FPSController.js';
 import { SpectatorController } from './SpectatorController.js';
 import { VehicleController } from './VehicleController.js';
+import { TouchControls, isTouchDevice } from './TouchControls.js';
 
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -232,6 +233,30 @@ export class ClientGame {
         this.fpsController = new FPSController();
         this.spectatorController = new SpectatorController();
         this.vehicleController = new VehicleController();
+
+        // ── Touch controls (mobile) ──
+        // Must be constructed after VehicleController — it adopts #vehicle-prompt
+        // as the "board vehicle" button instead of duplicating the proximity check.
+        this.isTouch = isTouchDevice();
+        this.touchControls = null;
+        if (this.isTouch) {
+            document.body.classList.add('touch-mode');
+            this.input.touchMode = true;
+            this.touchControls = new TouchControls(this.input, {
+                onScoreboardDown: () => {
+                    this.scoreboard.updateWeaponData(this.entityRenderer, this.scoreboard.playerNames, TEAM_SIZE);
+                    this.scoreboard.show(this._fps.playerName, this._fps.myEntityId);
+                },
+                onScoreboardUp: () => this.scoreboard.hide(),
+                onLeave: () => this._leaveGame(),
+                onSpectatorNext: () =>
+                    this.spectatorController.nextTarget(this._spectator, this.entityRenderer, this.hud),
+                onSpectatorView: () =>
+                    this.spectatorController.toggleView(this._spectator, this.camera, this.hud, this.spectatorHUD),
+                onSpectatorJoin: () =>
+                    this.joinScreen.createJoinUI((team, wpn, name) => this._joinGame(team, wpn, name), () => {}),
+            });
+        }
 
         // ── Previous flag states for detecting changes ──
         this._prevFlagStates = [];
@@ -1119,6 +1144,11 @@ export class ClientGame {
 
         // Position occupants on vehicle seats
         this.vehicleController.updateOccupants(this._fps, this.entityRenderer, this.vehicleRenderer);
+
+        // Reconcile touch control layer with game state (idempotent, cheap)
+        if (this.touchControls) {
+            this.touchControls.sync(this.gameMode, this._fps.vehicleId !== 0xFF);
+        }
 
         // Camera mode
         if (this.gameMode === 'playing') {

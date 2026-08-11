@@ -11,6 +11,10 @@ export class InputManager {
         this.mouseDeltaY = 0;
         this.scrollDelta = 0;
         this.isPointerLocked = false;
+        // When true, TouchControls owns mouseDown/rightMouseDown/mouseDelta and
+        // the browser's synthesized mouse events must be ignored — otherwise a
+        // tap anywhere would emulate a left click and fire the weapon.
+        this.touchMode = false;
 
         this._onKeyDown = this._onKeyDown.bind(this);
         this._onKeyUp = this._onKeyUp.bind(this);
@@ -39,11 +43,13 @@ export class InputManager {
     }
 
     _onMouseDown(e) {
+        if (this.touchMode) return;
         if (e.button === 0) this.mouseDown = true;
         if (e.button === 2) this.rightMouseDown = true;
     }
 
     _onMouseUp(e) {
+        if (this.touchMode) return;
         if (e.button === 0) this.mouseDown = false;
         if (e.button === 2) this.rightMouseDown = false;
     }
@@ -83,6 +89,7 @@ export class InputManager {
     }
 
     requestPointerLock() {
+        if (this.touchMode) return;
         document.body.requestPointerLock().catch(() => {});
     }
 

@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Island Conquest — Multiplayer</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,6 +17,10 @@
         #blocker h1 { color: #fff; font-family: Arial, sans-serif; font-size: 48px; margin-bottom: 16px; }
         #blocker p { color: #ccc; font-family: Arial, sans-serif; font-size: 18px; }
         #blocker.hidden { display: none; }
+        /* Touch devices: kill scroll, pinch-zoom, double-tap-zoom and pull-to-refresh */
+        body.touch-mode { touch-action: none; overscroll-behavior: none;
+            -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+        body.touch-mode canvas { touch-action: none; }
     </style>
 </head>
 <body>
