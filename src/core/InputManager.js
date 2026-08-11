@@ -10,6 +10,11 @@ export class InputManager {
         this.mouseDeltaX = 0;
         this.mouseDeltaY = 0;
         this.scrollDelta = 0;
+        // Overhead-map gestures (touch only): drag to pan, pinch to zoom.
+        // The keyboard/wheel path leaves these at zero.
+        this.panDeltaX = 0;
+        this.panDeltaY = 0;
+        this.pinchDelta = 0;
         this.isPointerLocked = false;
         // When true, TouchControls owns mouseDown/rightMouseDown/mouseDelta and
         // the browser's synthesized mouse events must be ignored — otherwise a
@@ -85,6 +90,20 @@ export class InputManager {
     consumeScrollDelta() {
         const d = this.scrollDelta;
         this.scrollDelta = 0;
+        return d;
+    }
+
+    consumePanDelta() {
+        const x = this.panDeltaX;
+        const y = this.panDeltaY;
+        this.panDeltaX = 0;
+        this.panDeltaY = 0;
+        return { x, y };
+    }
+
+    consumePinchDelta() {
+        const d = this.pinchDelta;
+        this.pinchDelta = 0;
         return d;
     }
 

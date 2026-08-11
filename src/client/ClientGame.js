@@ -16,7 +16,6 @@ import { VehicleRenderer } from './VehicleRenderer.js';
 import { EventType, SurfaceType } from '../shared/protocol.js';
 import { WeaponDefs, GunAnim } from '../entities/WeaponDefs.js';
 import { MOVE_SPEED, TEAM_SIZE } from '../shared/constants.js';
-import Stats from 'three/addons/libs/stats.module.js';
 
 import { ClientHUD } from './ClientHUD.js';
 import { Scoreboard } from './Scoreboard.js';
@@ -104,11 +103,6 @@ export class ClientGame {
         this.renderer.shadowMap.type = THREE.PCFShadowMap;
         this.renderer.setClearColor(0x87CEEB);
         document.body.appendChild(this.renderer.domElement);
-
-        // ── Stats (FPS counter) ──
-        this.stats = new Stats();
-        this.stats.showPanel(0);
-        document.body.appendChild(this.stats.dom);
 
         // ── Scene ──
         this.scene = new THREE.Scene();
@@ -1110,7 +1104,6 @@ export class ClientGame {
 
     _animate() {
         requestAnimationFrame(this._boundAnimate);
-        this.stats.begin();
 
         const dt = Math.min(this.clock.getDelta(), 0.1);
 
@@ -1147,7 +1140,12 @@ export class ClientGame {
 
         // Reconcile touch control layer with game state (idempotent, cheap)
         if (this.touchControls) {
-            this.touchControls.sync(this.gameMode, this._fps.vehicleId !== 0xFF);
+            this.touchControls.sync({
+                gameMode: this.gameMode,
+                inVehicle: this._fps.vehicleId !== 0xFF,
+                weaponId: this._fps.weaponId,
+                overhead: this._spectator.mode === 'overhead',
+            });
         }
 
         // Camera mode
@@ -1261,7 +1259,6 @@ export class ClientGame {
 
         // Render
         this.renderer.render(this.scene, this.camera);
-        this.stats.end();
     }
 
     /**

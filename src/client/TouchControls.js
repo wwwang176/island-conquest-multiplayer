@@ -29,10 +29,15 @@ const DIR_THRESHOLD  = 0.35; // analog → 8-way digital cutoff
 // _prevInteract) to observe it. 100ms ≈ 6 frames @60fps.
 const PULSE_MS = 100;
 
+// ── Overhead map gestures ──
+const PINCH_MIN_POINTERS = 2;
+
 // ── Look sensitivity ──
 const TOUCH_SCALE     = 1.6;   // scales against ClientGame's mouseSensitivity 0.002
 const BOOST_MIN_SPEED = 900;   // px/s — below this, no acceleration (precise aim)
 const BOOST_RANGE     = 2400;  // px/s span over which boost ramps 1.0 → 2.0
+
+import { WeaponDefs } from '../entities/WeaponDefs.js';
 
 /**
  * True when the client should present touch controls instead of pointer lock.
@@ -63,8 +68,9 @@ export class TouchControls {
 
         this.enabled = false;      // any control layer visible
         this.lookEnabled = false;  // right-half drag turns the view
-        this._mode = null;         // last synced gameMode
-        this._inVehicle = null;    // last synced vehicle state
+        this.mapEnabled = false;   // overhead spectator map: drag to pan, pinch to zoom
+        this._syncKey = null;      // last synced state signature
+        this._pinchPrev = null;    // previous two-finger distance
 
         /** @type {Map<number, {role:string, look:boolean, btn:HTMLElement|null, x:number, y:number, t:number}>} */
         this._pointers = new Map();
@@ -184,17 +190,43 @@ export class TouchControls {
 #touch-controls .tb-spec-join { right: calc(28px + env(safe-area-inset-right)); }
 
 /* ── Repositioned game HUD (touch only) ── */
-/* The health/ammo blocks carry inline font sizes on their children, so scale the
-   whole block rather than fighting each rule. */
-.touch-mode #health-hud {
-    bottom: calc(190px + env(safe-area-inset-bottom)) !important;
-    left: calc(24px + env(safe-area-inset-left)) !important;
-    transform: scale(0.78); transform-origin: bottom left;
-}
+/* Both readouts become centred horizontal strips at the bottom of the screen:
+   weapon / ammo / grenades on top, health bar underneath. The blocks are built
+   as stacked <div>s with inline margins, so flex + a margin reset turns them
+   into a row without touching ClientHUD. */
+.touch-mode #health-hud,
 .touch-mode #ammo-hud {
-    bottom: calc(212px + env(safe-area-inset-bottom)) !important;
-    right: calc(24px + env(safe-area-inset-right)) !important;
-    transform: scale(0.72); transform-origin: bottom right;
+    left: 50% !important;
+    right: auto !important;
+    min-width: 0 !important;
+    padding: 5px 14px !important;
+    white-space: nowrap;
+    display: flex !important; align-items: center; gap: 12px;
+    transform: translateX(-50%) scale(0.85);
+    transform-origin: bottom center;
+}
+/* !important above is needed to beat ClientHUD's inline display:block, so the
+   inline display:none it uses to hide the HUD has to be re-asserted here. */
+.touch-mode #health-hud[style*="display: none"],
+.touch-mode #ammo-hud[style*="display: none"] { display: none !important; }
+.touch-mode #health-hud > *,
+.touch-mode #ammo-hud > * { margin: 0 !important; }
+.touch-mode #ammo-hud {
+    bottom: calc(56px + env(safe-area-inset-bottom)) !important;
+}
+.touch-mode #health-hud {
+    bottom: calc(14px + env(safe-area-inset-bottom)) !important;
+}
+
+/* Spectating: SpectatorHUD already shows the target's HP bar, so the player
+   health strip would just repeat it. Drop it and drop the target readout to
+   the very bottom, with ammo stacked above. */
+.touch-mode.spectating #health-hud { display: none !important; }
+.touch-mode.spectating #ammo-hud {
+    bottom: calc(84px + env(safe-area-inset-bottom)) !important;
+}
+.touch-mode.spectating #spectator-target {
+    bottom: calc(30px + env(safe-area-inset-bottom)) !important;
 }
 .touch-mode #minimap {
     top: calc(12px + env(safe-area-inset-top)) !important;
@@ -302,6 +334,8 @@ export class TouchControls {
             }),
         ];
 
+        this.adsButton = this.root.querySelector('[data-tb="ads"]');
+
         this._allButtons = [
             ...this.infantryButtons, ...this.vehicleButtons,
             ...this.topButtons, ...this.spectatorButtons,
@@ -389,6 +423,17 @@ export class TouchControls {
                 x: e.clientX, y: e.clientY, t: performance.now(),
             });
             e.preventDefault();
+            return;
+        }
+
+        // ── Overhead map: anywhere outside the buttons ──
+        if (this.mapEnabled) {
+            this._pointers.set(e.pointerId, {
+                role: 'map', look: false, btn: null,
+                x: e.clientX, y: e.clientY, t: performance.now(),
+            });
+            this._pinchPrev = null;  // a new finger restarts the pinch baseline
+            e.preventDefault();
         }
     }
 
@@ -398,6 +443,32 @@ export class TouchControls {
 
         if (p.role === 'stick') {
             this._updateStick(e.clientX, e.clientY);
+            e.preventDefault();
+            return;
+        }
+
+        if (p.role === 'map') {
+            const dx = e.clientX - p.x;
+            const dy = e.clientY - p.y;
+            p.x = e.clientX;
+            p.y = e.clientY;
+
+            const maps = [];
+            for (const [, q] of this._pointers) {
+                if (q.role === 'map') maps.push(q);
+            }
+
+            if (maps.length >= PINCH_MIN_POINTERS) {
+                // Two fingers: pinch to zoom, panning is suppressed to keep it steady.
+                const [a, b] = maps;
+                const dist = Math.hypot(a.x - b.x, a.y - b.y);
+                if (this._pinchPrev !== null) this.input.pinchDelta += dist - this._pinchPrev;
+                this._pinchPrev = dist;
+            } else {
+                this._pinchPrev = null;
+                this.input.panDeltaX += dx;
+                this.input.panDeltaY += dy;
+            }
             e.preventDefault();
             return;
         }
@@ -429,6 +500,7 @@ export class TouchControls {
         this._pointers.delete(e.pointerId);
 
         if (p.role === 'stick') this._resetStick();
+        if (p.role === 'map') this._pinchPrev = null;
         if (p.btn) this._release(p.btn);
     }
 
@@ -559,13 +631,16 @@ export class TouchControls {
     /**
      * Reconcile the control layer with the current game state. Cheap and
      * idempotent — call it every frame from the animation loop.
-     * @param {string} gameMode  'connecting' | 'spectator' | 'playing' | 'dead'
-     * @param {boolean} inVehicle
+     * @param {object} state
+     * @param {string} state.gameMode   'connecting' | 'spectator' | 'playing' | 'dead'
+     * @param {boolean} state.inVehicle
+     * @param {string} state.weaponId
+     * @param {boolean} state.overhead  spectator is in overhead map view
      */
-    sync(gameMode, inVehicle) {
-        if (gameMode === this._mode && inVehicle === this._inVehicle) return;
-        this._mode = gameMode;
-        this._inVehicle = inVehicle;
+    sync({ gameMode, inVehicle, weaponId, overhead }) {
+        const key = `${gameMode}|${inVehicle}|${weaponId}|${overhead}`;
+        if (key === this._syncKey) return;
+        this._syncKey = key;
 
         this._releaseAll();
 
@@ -574,12 +649,20 @@ export class TouchControls {
 
         this.enabled = playing || spectating;
         this.lookEnabled = playing;
+        this.mapEnabled = spectating && !!overhead;
+        document.body.classList.toggle('spectating', spectating);
 
         this.stickBase.style.display = playing ? 'block' : 'none';
         this._setVisible(this.infantryButtons, playing && !inVehicle);
         this._setVisible(this.vehicleButtons, playing && inVehicle);
         this._setVisible(this.topButtons, playing);
         this._setVisible(this.spectatorButtons, spectating);
+
+        // ADS only exists for weapons that actually have a scope — an always-on
+        // button that does nothing is worse on touch than on desktop, where a
+        // dead right-click costs nothing.
+        const hasScope = !!WeaponDefs[weaponId]?.scopeFOV;
+        this.adsButton.classList.toggle('tb-hidden', !(playing && !inVehicle && hasScope));
     }
 
     dispose() {
