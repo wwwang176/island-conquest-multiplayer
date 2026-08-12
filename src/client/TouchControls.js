@@ -33,7 +33,7 @@ const PULSE_MS = 100;
 const PINCH_MIN_POINTERS = 2;
 
 // ── Look sensitivity ──
-const TOUCH_SCALE     = 1.6;   // scales against ClientGame's mouseSensitivity 0.002
+const TOUCH_SCALE     = 3.2;   // scales against ClientGame's mouseSensitivity 0.002
 const BOOST_MIN_SPEED = 900;   // px/s — below this, no acceleration (precise aim)
 const BOOST_RANGE     = 2400;  // px/s span over which boost ramps 1.0 → 2.0
 
@@ -99,6 +99,13 @@ export class TouchControls {
 
     /** Ask for fullscreen + landscape. Safe to call repeatedly. */
     _enterPresentation() {
+        // This runs on every in-game button press, so bail out immediately in
+        // the common case rather than re-entering the orientation API each time.
+        if (document.fullscreenElement && !this._isPortrait()) {
+            if (this.rotatePrompt.style.display !== 'none') this._updateRotatePrompt();
+            return;
+        }
+
         if (!document.fullscreenElement) {
             const el = document.documentElement;
             const req = el.requestFullscreen || el.webkitRequestFullscreen;
@@ -164,11 +171,12 @@ export class TouchControls {
     text-shadow: 0 1px 2px rgba(0,0,0,0.8);
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
-    transition: background 60ms linear, transform 60ms linear;
+    transition: background 90ms linear, transform 90ms linear;
 }
 #touch-controls .tb.tb-active {
     background: rgba(255,255,255,0.34);
     transform: scale(0.94);
+    transition: none;   /* press reads instantly; only the release fades */
 }
 #touch-controls .tb.tb-hidden { display: none; }
 
@@ -329,11 +337,16 @@ export class TouchControls {
     top: calc(14px + env(safe-area-inset-top)) !important;
     right: calc(130px + env(safe-area-inset-right)) !important;
 }
+/* Both of these sat at 150px, which on a ~390px-tall landscape screen lands
+   right on the centre crosshair. Keep them clear of it. */
 .touch-mode #vehicle-hud {
-    bottom: calc(150px + env(safe-area-inset-bottom)) !important;
+    bottom: calc(100px + env(safe-area-inset-bottom)) !important;
+    padding: 6px 16px !important;
 }
+/* Keyboard legend — meaningless on touch, and it makes the panel tall. */
+.touch-mode #vhud-controls { display: none !important; }
 .touch-mode #vehicle-prompt {
-    bottom: calc(150px + env(safe-area-inset-bottom)) !important;
+    bottom: calc(118px + env(safe-area-inset-bottom)) !important;
     z-index: 120 !important;
     pointer-events: auto !important;
     padding: 12px 26px !important;
@@ -652,18 +665,21 @@ export class TouchControls {
         const def = btn._tbDef;
         btn.classList.add('tb-active');
 
-        // JOIN is the entry point into the game, so that press is what claims
-        // fullscreen + landscape. Every in-game press re-checks, because the
-        // user can drop out of fullscreen at any time (back gesture, notification
-        // shade) and only a gesture can get it back.
-        if (def.id === 'spec-join' || this.lookEnabled) this._enterPresentation();
-
-        if (def.onDown) def.onDown();
+        // Register the input FIRST. Everything below is bookkeeping, and none of
+        // it may sit between the finger landing and the key bit being set.
         if (def.mode === 'hold') {
             this._setInput(def, true);
         } else if (def.key || def.act) {
             this._pulse(def);
         }
+        if (def.onDown) def.onDown();
+
+        // JOIN is the entry point into the game, so that press is what claims
+        // fullscreen + landscape. Every in-game press re-checks, because the
+        // user can drop out of fullscreen at any time (back gesture, notification
+        // shade) and only a gesture can get it back. Still inside the same
+        // synchronous handler, so it still counts as a user gesture.
+        if (def.id === 'spec-join' || this.lookEnabled) this._enterPresentation();
     }
 
     _release(btn) {
