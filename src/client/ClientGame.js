@@ -97,7 +97,8 @@ export class ClientGame {
 
         // ── Renderer ──
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        // updateStyle=false throughout — see _resizeRenderer.
+        this.renderer.setSize(window.innerWidth, window.innerHeight, false);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -118,11 +119,19 @@ export class ClientGame {
         this._setupLighting();
 
         // ── Window resize ──
-        window.addEventListener('resize', () => {
-            this.camera.aspect = window.innerWidth / window.innerHeight;
-            this.camera.updateProjectionMatrix();
-            this.renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+        // iOS Safari fires 'resize' before innerWidth/innerHeight have settled on
+        // a rotation, and fires nothing at all for some fullscreen transitions, so
+        // rotation and fullscreen get their own delayed re-run.
+        this._onResize = () => this._resizeRenderer();
+        window.addEventListener('resize', this._onResize);
+        window.visualViewport?.addEventListener('resize', this._onResize);
+        const reflowLater = () => {
+            this._resizeRenderer();
+            setTimeout(this._onResize, 300);
+        };
+        window.addEventListener('orientationchange', reflowLater);
+        document.addEventListener('fullscreenchange', reflowLater);
+        this._resizeRenderer();
 
         // ── Network ──
         this.network = new NetworkClient();
@@ -1101,6 +1110,27 @@ export class ClientGame {
     // ═══════════════════════════════════════════════════════
     // Game Loop
     // ═══════════════════════════════════════════════════════
+
+    /**
+     * Resize the drawing buffer to the current viewport.
+     *
+     * Passing updateStyle=false is the important part: with the default, three.js
+     * writes inline width/height px onto the canvas, which outranks the stylesheet's
+     * 100%/100%. A stale size — routine on iOS around rotation — then pins the canvas
+     * to a smaller box and the rest of the screen shows the black body behind it.
+     * With styling left to CSS, a stale value costs a moment of wrong resolution
+     * and nothing more.
+     */
+    _resizeRenderer() {
+        const vv = window.visualViewport;
+        const w = Math.round(vv?.width || window.innerWidth);
+        const h = Math.round(vv?.height || window.innerHeight);
+        if (w < 1 || h < 1) return;
+
+        this.camera.aspect = w / h;
+        this.camera.updateProjectionMatrix();
+        this.renderer.setSize(w, h, false);
+    }
 
     _animate() {
         requestAnimationFrame(this._boundAnimate);

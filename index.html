@@ -21,6 +21,12 @@
         body.touch-mode { touch-action: none; overscroll-behavior: none;
             -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
         body.touch-mode canvas { touch-action: none; }
+        /* iOS Safari refuses to focus/edit a field under an ancestor's
+           user-select:none, so form controls opt back in. */
+        body.touch-mode input, body.touch-mode textarea, body.touch-mode select {
+            -webkit-user-select: text; user-select: text;
+            touch-action: manipulation;
+        }
     </style>
 </head>
 <body>

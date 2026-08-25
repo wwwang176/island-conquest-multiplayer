@@ -490,6 +490,12 @@ export class TouchControls {
     _onPointerDown(e) {
         if (!this.enabled) return;
 
+        // Look and map drags are only claimed when the finger lands on the 3D
+        // canvas. Claiming "anything that isn't a button" swallowed presses on
+        // overlay UI — the join panel's name field could never take focus,
+        // because on mobile focus rides on the events preventDefault() cancels.
+        const onCanvas = (e.target instanceof Element) && e.target.tagName === 'CANVAS';
+
         // ── Button (may also start a look drag) ──
         const btn = (e.target instanceof Element) ? e.target.closest('[data-tb]') : null;
         if (btn && btn._tbDef) {
@@ -516,7 +522,7 @@ export class TouchControls {
         }
 
         // ── Bare look drag (right half only) ──
-        if (this.lookEnabled && e.clientX > window.innerWidth * 0.5) {
+        if (onCanvas && this.lookEnabled && e.clientX > window.innerWidth * 0.5) {
             this._pointers.set(e.pointerId, {
                 role: 'look', look: true, btn: null,
                 x: e.clientX, y: e.clientY, t: performance.now(),
@@ -525,8 +531,8 @@ export class TouchControls {
             return;
         }
 
-        // ── Overhead map: anywhere outside the buttons ──
-        if (this.mapEnabled) {
+        // ── Overhead map: anywhere on the canvas ──
+        if (onCanvas && this.mapEnabled) {
             this._pointers.set(e.pointerId, {
                 role: 'map', look: false, btn: null,
                 x: e.clientX, y: e.clientY, t: performance.now(),
