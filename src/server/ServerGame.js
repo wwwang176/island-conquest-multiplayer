@@ -932,10 +932,13 @@ export class ServerGame {
         const spectatorCount = this.network.getSpectatorCount();
         this.network.send(ws, encodeScoreboardSync(sbEntries, spectatorCount));
 
-        // Replay every current player's appearance so late joiners colour them
-        // correctly the first time they show up in a snapshot
+        // Replay every current player so late joiners know who is who. PlayerJoined
+        // carries the entityId → name mapping the nameplates and the scoreboard
+        // need; without it, anyone who joined before this client stays anonymous
+        // and gets tagged as a COM.
         const appearances = [];
         for (const [, p] of this.players) {
+            this.network.send(ws, encodePlayerJoined(p._entityId, p.playerName, p.team));
             appearances.push({ entityId: p._entityId, appearance: p.appearance ?? DEFAULT_APPEARANCE });
         }
         if (appearances.length > 0) {

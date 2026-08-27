@@ -8,6 +8,10 @@ import {
     DEFAULT_APPEARANCE, SKIN_COLOR, DEFAULT_LEG_TINT,
     unpackAppearance, paletteColor,
 } from '../shared/Appearance.js';
+import {
+    createNameplate, updateNameplateText, updateNameplateScale, disposeNameplate,
+    isNameplateVisible,
+} from './Nameplate.js';
 
 const WATER_Y = -0.3;
 const BODY_CENTER_OFFSET = 0.8;
@@ -346,6 +350,17 @@ export class EntityRenderer {
          */
         this._appearances = new Map();
 
+        /**
+         * Human player names, keyed by entityId. Drives the floating nameplates;
+         * AI COMs never appear here and never get a plate.
+         * @type {Map<number, string>}
+         */
+        this._playerNames = new Map();
+
+        // Nameplate audience: null team = spectating, so every player's plate shows.
+        this._viewerTeam = null;
+        this._viewerEntityId = -1;
+
         this.ragdollWorld = null;       // Set by ClientGame
         this.impactVFX = null;          // Set by ClientGame
         this.getHeightAt = null;        // Set by ClientGame
@@ -435,6 +450,7 @@ export class EntityRenderer {
                     entry.mesh.geometry.dispose();
                     entry.mesh.material.dispose();
                 }
+                if (entry.nameplate) disposeNameplate(entry.nameplate);
                 this._stopRagdoll(entry);
                 this.scene.remove(entry.mesh);
                 this.entities.delete(id);
@@ -693,12 +709,14 @@ export class EntityRenderer {
 
     clear() {
         for (const [, entry] of this.entities) {
+            if (entry.nameplate) disposeNameplate(entry.nameplate);
             this._stopRagdoll(entry);
             this.scene.remove(entry.mesh);
         }
         this.entities.clear();
         this.interp.clear();
         this._appearances.clear();
+        this._playerNames.clear();
 
         // Clean up dropped weapons
         for (const gun of this._droppedWeapons) {
@@ -1094,6 +1112,70 @@ export class EntityRenderer {
         this._appearances.delete(entityId);
     }
 
+    /**
+     * Register a human player's name and give their soldier a floating nameplate.
+     * Safe to call before the entity exists — the plate is attached on creation.
+     * @param {number} entityId
+     * @param {string} name
+     */
+    setPlayerName(entityId, name) {
+        this._playerNames.set(entityId, name);
+        const entry = this.entities.get(entityId);
+        if (!entry || entry.isGrenade) return;
+        if (entry.nameplate) {
+            updateNameplateText(entry.nameplate, name, entry.team);
+        } else {
+            this._attachNameplate(entry, name);
+        }
+    }
+
+    /** Drop a player's name and plate when they leave. */
+    forgetPlayerName(entityId) {
+        this._playerNames.delete(entityId);
+        const entry = this.entities.get(entityId);
+        if (entry?.nameplate) {
+            entry.mesh.remove(entry.nameplate);
+            disposeNameplate(entry.nameplate);
+            entry.nameplate = null;
+        }
+    }
+
+    /**
+     * Set who is looking, which decides whose plates are visible.
+     * @param {string|null} viewerTeam - null while spectating: every player shows.
+     *   Once playing, only this team's plates show.
+     * @param {number} myEntityId - the local player, who never gets their own plate
+     */
+    setNameplateViewer(viewerTeam, myEntityId) {
+        this._viewerTeam = viewerTeam;
+        this._viewerEntityId = myEntityId;
+    }
+
+    /**
+     * Size and show/hide nameplates. Called once per frame from the render loop,
+     * after positions have been interpolated.
+     * @param {THREE.PerspectiveCamera} camera
+     */
+    updateNameplates(camera) {
+        for (const [entityId, entry] of this.entities) {
+            const plate = entry.nameplate;
+            if (!plate) continue;
+
+            const visible = isNameplateVisible(
+                entry, entityId, this._viewerTeam, this._viewerEntityId
+            );
+            plate.visible = visible;
+            if (!visible) continue;
+
+            updateNameplateScale(plate, camera, camera.position.distanceTo(entry.mesh.position));
+        }
+    }
+
+    _attachNameplate(entry, name) {
+        entry.nameplate = createNameplate(name, entry.team);
+        entry.mesh.add(entry.nameplate);
+    }
+
     _createEntity(entityId, team, weaponId) {
         const color = TEAM_COLORS[team] || 0xaaaaaa;
         const appearance = this._appearances.get(entityId) ?? DEFAULT_APPEARANCE;
@@ -1102,12 +1184,13 @@ export class EntityRenderer {
         mesh.userData.team = team;
         this.scene.add(mesh);
 
-        return {
+        const entry = {
             mesh,
             team,
             alive: true,
             hp: 100,
             weaponId,
+            nameplate: null,
             upperBody: mesh.userData._upperBody,
             shoulderPivot: mesh.userData._shoulderPivot,
             lowerBody: mesh.userData._lowerBody,
@@ -1131,6 +1214,12 @@ export class EntityRenderer {
             ammo: 0,
             grenades: 0,
         };
+
+        // A player whose name arrived before their first snapshot gets their plate now
+        const knownName = this._playerNames.get(entityId);
+        if (knownName !== undefined) this._attachNameplate(entry, knownName);
+
+        return entry;
     }
 
 
