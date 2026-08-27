@@ -238,7 +238,10 @@ export class FlagPoint {
         ctx.fillText(text, 64, 32);
 
         const tex = new THREE.CanvasTexture(canvas);
-        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+        // depthWrite off: the label and the water are both in the transparent
+        // pass, and a label drawn first would write depth across its whole quad
+        // — transparent pixels included — punching a hole in the sea behind it.
+        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
         const sprite = new THREE.Sprite(mat);
         sprite.scale.set(2, 1, 1);
         return sprite;

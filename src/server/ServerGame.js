@@ -3,8 +3,11 @@ import { WeaponDefs } from '../entities/WeaponDefs.js';
 import {
     encodeWorldSeed, encodeSnapshot, encodeEventBatch, encodeScoreboardSync,
     encodeInputAck, encodePlayerSpawned, encodePlayerJoined, encodePlayerLeft,
-    encodeJoinRejected, EntityType, EventType, SurfaceType, KeyBit,
+    encodeJoinRejected, encodePlayerAppearance,
+    EntityType, EventType, SurfaceType, KeyBit,
 } from '../shared/protocol.js';
+import { sanitizeAppearance, DEFAULT_APPEARANCE } from '../shared/Appearance.js';
+import { validatePlayerName } from '../shared/PlayerName.js';
 import { ServerIsland } from './ServerIsland.js';
 import { ServerPhysics } from './ServerPhysics.js';
 import { ServerAIManager } from './ServerAIManager.js';
@@ -930,6 +933,19 @@ export class ServerGame {
         const spectatorCount = this.network.getSpectatorCount();
         this.network.send(ws, encodeScoreboardSync(sbEntries, spectatorCount));
 
+        // Replay every current player so late joiners know who is who. PlayerJoined
+        // carries the entityId → name mapping the nameplates and the scoreboard
+        // need; without it, anyone who joined before this client stays anonymous
+        // and gets tagged as a COM.
+        const appearances = [];
+        for (const [, p] of this.players) {
+            this.network.send(ws, encodePlayerJoined(p._entityId, p.playerName, p.team));
+            appearances.push({ entityId: p._entityId, appearance: p.appearance ?? DEFAULT_APPEARANCE });
+        }
+        if (appearances.length > 0) {
+            this.network.send(ws, encodePlayerAppearance(appearances));
+        }
+
         // If game is in end-of-round countdown, send GAME_OVER + current countdown
         // so the late joiner sees the result screen immediately
         if (this.gameOver && this._gameOverWinner) {
@@ -981,8 +997,9 @@ export class ServerGame {
      * @param {string} team - 'teamA' or 'teamB'
      * @param {string} weaponId - e.g. 'AR15'
      * @param {string} playerName
+     * @param {number} [appearance=0] - packed head/leg palette indices
      */
-    onJoinRequest(clientId, team, weaponId, playerName) {
+    onJoinRequest(clientId, team, weaponId, playerName, appearance = DEFAULT_APPEARANCE) {
         // Block joins during countdown
         if (this.gameOver) {
             console.log(`[Game] Client ${clientId} tried to join during countdown, ignoring`);
@@ -1007,28 +1024,18 @@ export class ServerGame {
         // Validate weaponId — fall back to AR15 if invalid
         if (!VALID_WEAPONS.includes(weaponId)) weaponId = VALID_WEAPONS[0];
 
-        // ── Sanitize player name ──
-        playerName = String(playerName).trim().replace(/[^\w\s\-]/g, '').substring(0, 16).trim();
-        if (playerName.length === 0) playerName = 'Player';
-
-        // Reject names that look like COM names (e.g. A-3, B-14)
-        if (/^[AB]-\d+$/.test(playerName)) {
-            console.log(`[Game] Client ${clientId} rejected: name "${playerName}" resembles COM format`);
+        // ── Sanitize and check the player name ──
+        // The join screen runs the same rules when the name is submitted; this is
+        // the authoritative pass, and the only one that sees simultaneous joins.
+        const takenNames = [...this.players.values()].map(p => p.playerName);
+        const nameCheck = validatePlayerName(playerName, takenNames);
+        playerName = nameCheck.name;
+        if (!nameCheck.ok) {
+            console.log(`[Game] Client ${clientId} rejected: "${playerName}" — ${nameCheck.error}`);
             if (this.network) {
-                this.network.sendToClient(clientId, encodeJoinRejected('Name not allowed'));
+                this.network.sendToClient(clientId, encodeJoinRejected(nameCheck.error));
             }
             return;
-        }
-
-        // Reject duplicate player names
-        for (const [, p] of this.players) {
-            if (p.playerName === playerName) {
-                console.log(`[Game] Client ${clientId} rejected: name "${playerName}" already taken`);
-                if (this.network) {
-                    this.network.sendToClient(clientId, encodeJoinRejected('Name already taken'));
-                }
-                return;
-            }
         }
 
         console.log(`[Game] Client ${clientId} joining ${team} with ${weaponId} as "${playerName}"`);
@@ -1040,6 +1047,7 @@ export class ServerGame {
             clientId, playerName, weaponId
         );
         player._entityId = entityId;
+        player.appearance = sanitizeAppearance(appearance);
         player.eventBus = this.eventBus;
         player.getHeightAt = (x, z) => this.island.getHeightAt(x, z);
         player.navGrid = this.navGrid;
@@ -1077,6 +1085,12 @@ export class ServerGame {
             // Broadcast PlayerJoined to all other clients
             const joinBuf = encodePlayerJoined(entityId, playerName, team);
             this.network.broadcastExcept(joinBuf, clientId);
+
+            // Appearance goes to everyone, the joiner included — they see their own
+            // soldier in the death cam and while spectating.
+            this.network.broadcast(
+                encodePlayerAppearance([{ entityId, appearance: player.appearance }])
+            );
         }
 
         console.log(`[Game] Player "${playerName}" spawned as entity ${entityId} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
