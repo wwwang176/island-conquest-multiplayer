@@ -29,6 +29,11 @@ ThreatMap.prototype._updateVisTexture = function() {};
 // Override ThreatMap._initWorker to use Node.js worker_threads
 const origInitThreatWorker = ThreatMap.prototype._initWorker;
 ThreatMap.prototype._initWorker = function() {
+    // Round reset re-inits against a fresh height grid — drop the previous worker
+    // (and its busy flag, or a stale in-flight job would wedge updates forever).
+    if (this._worker) this._worker.terminate();
+    this._workerBusy = false;
+
     const workerPath = join(__dirname, '..', 'workers', 'threat-worker-node.js');
     this._worker = new Worker(workerPath);
 
@@ -171,6 +176,19 @@ export class ServerAIManager {
     }
 
     setNavGrid(grid, heightGrid, obstacleBounds) {
+        // Re-callable: a round reset regenerates the map and rebinds a brand new grid.
+        // Retire the workers bound to the old grid first so they don't pile up.
+        if (this._navGrid && this._navGrid !== grid && this._navGrid._pathWorker) {
+            this._navGrid._pathWorker.terminate();
+            this._navGrid._pathWorker = null;
+            this._navGrid._pendingCallbacks?.clear();
+        }
+        if (this._scanWorker) {
+            this._scanWorker.terminate();
+            this._scanWorker = null;
+            this._scanPending = false;
+        }
+
         for (const ctrl of [...this.teamA.controllers, ...this.teamB.controllers]) {
             ctrl.navGrid = grid;
         }

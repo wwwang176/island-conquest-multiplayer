@@ -41,6 +41,11 @@ export class Island {
         // Exclusion zones: [{x, z, r}] — obstacle/vegetation generation skips these
         this._exclusionZones = [];
 
+        // Everything this island owns — tracked so dispose() can tear it all down
+        // when the map is regenerated between rounds.
+        this._sceneObjects = [];
+        this._bodies = [];
+
         this._generateTerrain();
         this._generateWater();
         // Cache flag positions early so cover generation can use them
@@ -50,6 +55,45 @@ export class Island {
         this._generateCovers();
         this._generateBuildings();
         this._generateVegetation();
+    }
+
+    // ── Lifecycle ──
+
+    /** Add a mesh to the scene, remembering it for dispose(). */
+    _addToScene(obj) {
+        this._sceneObjects.push(obj);
+        this.scene.add(obj);
+    }
+
+    /** Register a static body with the ragdoll physics world, remembering it for dispose(). */
+    _addBody(body) {
+        this._bodies.push(body);
+        this.physics.addBody(body);
+    }
+
+    /**
+     * Remove every mesh, material and physics body this island created.
+     * Called before a new island replaces this one at round reset — without it the
+     * old terrain would stay in the scene and its colliders would keep blocking shots.
+     */
+    dispose() {
+        for (const obj of this._sceneObjects) {
+            this.scene.remove(obj);
+            obj.geometry?.disposeBoundsTree?.();
+            obj.geometry?.dispose();
+            const mat = obj.material;
+            if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+            else mat?.dispose();
+        }
+        this._sceneObjects.length = 0;
+
+        for (const body of this._bodies) this.physics.removeBody?.(body);
+        this._bodies.length = 0;
+
+        this.collidables.length = 0;
+        this._obstacleDescs.length = 0;
+        this.obstacleBounds.length = 0;
+        this.terrainMesh = null;
     }
 
     /**
@@ -117,7 +161,7 @@ export class Island {
         this.terrainMesh.receiveShadow = true;
         this.terrainMesh.castShadow = true;
         this.terrainMesh.userData.surfaceType = 'terrain';
-        this.scene.add(this.terrainMesh);
+        this._addToScene(this.terrainMesh);
         this.collidables.push(this.terrainMesh);
 
         // BVH acceleration for raycast
@@ -215,7 +259,7 @@ export class Island {
             this.depth / 2
         );
 
-        this.physics.addBody(hfBody);
+        this._addBody(hfBody);
         this.terrainBody = hfBody;
     }
 
@@ -295,7 +339,7 @@ export class Island {
         water.rotation.x = -Math.PI / 2;
         water.position.y = -0.3;
         water.userData.surfaceType = 'water';
-        this.scene.add(water);
+        this._addToScene(water);
         this.collidables.push(water);
 
         // BVH acceleration for raycast
@@ -528,7 +572,7 @@ export class Island {
         const body = new CANNON.Body({ mass: 0, material: this.physics.defaultMaterial });
         body.addShape(new CANNON.Sphere(scale * 0.7));
         body.position.set(x, h + scale * 0.3, z);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         // Register cover
         const normal = new THREE.Vector3(
@@ -571,7 +615,7 @@ export class Island {
         body.addShape(new CANNON.Box(new CANNON.Vec3(size * 0.6, size / 2, size / 2)));
         body.position.set(x, h + size / 2, z);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), rotY);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         // Register cover (half cover)
         this.coverSystem.register(
@@ -607,7 +651,7 @@ export class Island {
         body.addShape(new CANNON.Box(new CANNON.Vec3(1.25, 0.4, 0.3)));
         body.position.set(x, h + 0.4, z);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), rotY);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         // Register cover (half cover)
         this.coverSystem.register(
@@ -645,7 +689,7 @@ export class Island {
         body.addShape(new CANNON.Box(new CANNON.Vec3(wallW / 2, wallH / 2, 0.2)));
         body.position.set(x, h + wallH / 2, z);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), rotY);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         // Register cover on both sides of wall (full cover)
         const nx = Math.cos(rotY + Math.PI / 2);
@@ -672,7 +716,7 @@ export class Island {
             mesh.castShadow = cfg.shadow;
             mesh.receiveShadow = cfg.shadow;
             mesh.userData.surfaceType = cfg.surface;
-            this.scene.add(mesh);
+            this._addToScene(mesh);
             this.collidables.push(mesh);
 
             // BVH acceleration for raycast
@@ -805,7 +849,7 @@ export class Island {
             const trunkMesh = new THREE.Mesh(mergedTrunks, trunkMat);
             trunkMesh.castShadow = true;
             trunkMesh.customDepthMaterial = swayDepthMat;
-            this.scene.add(trunkMesh);
+            this._addToScene(trunkMesh);
 
             const mergedFronds = mergeGeometries(frondGeometries);
             const frondMat = new THREE.MeshLambertMaterial({ color: 0x2d8a2d, side: THREE.DoubleSide, flatShading: true });
@@ -813,7 +857,7 @@ export class Island {
             const frondMesh = new THREE.Mesh(mergedFronds, frondMat);
             frondMesh.castShadow = true;
             frondMesh.customDepthMaterial = swayDepthMat;
-            this.scene.add(frondMesh);
+            this._addToScene(frondMesh);
         }
 
         // Low bushes/grass clumps — collect valid positions, then use InstancedMesh
@@ -845,7 +889,7 @@ export class Island {
                 _mat4.compose(_pos, _quat, _scale);
                 bushMesh.setMatrixAt(i, _mat4);
             }
-            this.scene.add(bushMesh);
+            this._addToScene(bushMesh);
         }
     }
 

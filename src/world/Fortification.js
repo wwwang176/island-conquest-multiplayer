@@ -52,7 +52,7 @@ export function generateFortifications(island, flagPositions) {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.userData.surfaceType = 'sand';
-        island.scene.add(mesh);
+        island._addToScene(mesh);
         island.collidables.push(mesh);
 
         // BVH acceleration for raycast
@@ -109,7 +109,7 @@ function _buildBattlement(island, battlementGeos, cx, cz, groundY, faceAngle, fl
     body.addShape(new CANNON.Box(new CANNON.Vec3(bodyW / 2, bodyH / 2, bodyD / 2)));
     body.position.set(cx, bodyY, cz);
     body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), faceAngle);
-    island.physics.addBody(body);
+    island._addBody(body);
 
     // NavGrid obstacle
     island._obstacleDescs.push({

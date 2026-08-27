@@ -29,6 +29,14 @@ export class CoverSystem {
     }
 
     /**
+     * Drop every registered cover spot.
+     * Used when the map is regenerated so stale positions don't survive into the new round.
+     */
+    clear() {
+        this.covers.length = 0;
+    }
+
+    /**
      * Find best cover spots near a position, facing away from a threat.
      * @param {THREE.Vector3} pos - Seeker's current position
      * @param {THREE.Vector3} threatDir - Direction threat is coming from (normalized)
