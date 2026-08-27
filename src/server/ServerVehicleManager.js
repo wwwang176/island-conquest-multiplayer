@@ -58,6 +58,18 @@ export class ServerVehicleManager {
     }
 
     /**
+     * Recompute every vehicle's spawn point against the current terrain.
+     * Called after the map is regenerated, before respawn(), so helicopters
+     * don't reappear inside a hill or out at sea on the new island.
+     */
+    relocateSpawns() {
+        for (const v of this.vehicles) {
+            if (!v.spawnFlag) continue;
+            v.spawnPosition.copy(this._findLandSpawn(v.spawnFlag.position, 8));
+        }
+    }
+
+    /**
      * Per-tick update: update all vehicles.
      */
     update(dt) {

@@ -37,6 +37,20 @@ export class FlagPoint {
         scene.add(this.group);
     }
 
+    /**
+     * Remove this flag's visuals from the scene and free its GPU resources.
+     * Called when the map is regenerated and flags move to new positions.
+     */
+    dispose() {
+        this.group.traverse((obj) => {
+            obj.geometry?.dispose();
+            const mat = obj.material;
+            if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+            else mat?.dispose();
+        });
+        this.scene.remove(this.group);
+    }
+
     _buildVisual() {
         // Flag pole
         const poleGeo = new THREE.CylinderGeometry(0.08, 0.08, 6, 6);

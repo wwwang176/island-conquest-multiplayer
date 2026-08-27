@@ -19,6 +19,8 @@ const dummyMat = new THREE.MeshBasicMaterial();
 export class ServerIsland {
     constructor(physics, coverSystem, seed) {
         this.physics = physics;
+        /** Every static body this island registered — tracked so dispose() can unregister them. */
+        this._bodies = [];
         this.coverSystem = coverSystem;
         this.noise = new Noise(seed);
 
@@ -51,6 +53,34 @@ export class ServerIsland {
         this._generateCovers();
         this._generateBuildings();
         // No vegetation on server (pure visual)
+    }
+
+    // ── Lifecycle ──
+
+    /** Register a static body with the physics world, remembering it for dispose(). */
+    _addBody(body) {
+        this._bodies.push(body);
+        this.physics.addBody(body);
+    }
+
+    /**
+     * Unregister everything this island put into the physics world and free geometry.
+     * Called before a new island replaces this one at round reset.
+     */
+    dispose() {
+        for (const body of this._bodies) this.physics.removeBody(body);
+        this._bodies.length = 0;
+        this.terrainBody = null;
+
+        for (const mesh of this.collidables) {
+            const geo = mesh.geometry;
+            if (!geo) continue;
+            geo.disposeBoundsTree?.();
+            geo.dispose();
+        }
+        this.collidables.length = 0;
+        this._obstacleDescs.length = 0;
+        this.obstacleBounds.length = 0;
     }
 
     // ── Height query ──
@@ -151,7 +181,7 @@ export class ServerIsland {
         hfBody.addShape(hfShape);
         hfBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
         hfBody.position.set(-this.width / 2, 0, this.depth / 2);
-        this.physics.addBody(hfBody);
+        this._addBody(hfBody);
         this.terrainBody = hfBody;
     }
 
@@ -369,7 +399,7 @@ export class ServerIsland {
         const body = new CANNON.Body({ mass: 0, material: this.physics.defaultMaterial });
         body.addShape(new CANNON.Sphere(scale * 0.7));
         body.position.set(x, h + scale * 0.3, z);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         // Cover
         const normal = new THREE.Vector3(
@@ -405,7 +435,7 @@ export class ServerIsland {
         body.addShape(new CANNON.Box(new CANNON.Vec3(size * 0.6, size / 2, size / 2)));
         body.position.set(x, h + size / 2, z);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), rotY);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         this.coverSystem.register(
             new THREE.Vector3(x, h, z),
@@ -437,7 +467,7 @@ export class ServerIsland {
         body.addShape(new CANNON.Box(new CANNON.Vec3(1.25, 0.4, 0.3)));
         body.position.set(x, h + 0.4, z);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), rotY);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         this.coverSystem.register(
             new THREE.Vector3(x, h, z),
@@ -471,7 +501,7 @@ export class ServerIsland {
         body.addShape(new CANNON.Box(new CANNON.Vec3(wallW / 2, wallH / 2, 0.2)));
         body.position.set(x, h + wallH / 2, z);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), rotY);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         const nx = Math.cos(rotY + Math.PI / 2);
         const nz = Math.sin(rotY + Math.PI / 2);
@@ -578,7 +608,7 @@ export class ServerIsland {
         body.addShape(new CANNON.Box(new CANNON.Vec3(bodyW / 2, bodyH / 2, bodyD / 2)));
         body.position.set(cx, bodyY, cz);
         body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), faceAngle);
-        this.physics.addBody(body);
+        this._addBody(body);
 
         this._obstacleDescs.push({
             type: 'box', x: cx, y: bodyY, z: cz,

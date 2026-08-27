@@ -78,17 +78,7 @@ export class ServerGame {
      * Must be called before start().
      */
     async init() {
-        console.log('[Game] Generating island...');
-        const t0 = performance.now();
-        this.island = new ServerIsland(this.physics, this.coverSystem, this.seed);
-        console.log(`[Game] Island generated in ${(performance.now() - t0).toFixed(0)}ms — ${this.island.collidables.length} collidables`);
-
-        console.log('[Game] Building NavGrid...');
-        const t1 = performance.now();
-        const { navGrid, heightGrid } = await this.island.buildNavGridAsync();
-        this.navGrid = navGrid;
-        this.heightGrid = heightGrid;
-        console.log(`[Game] NavGrid built in ${(performance.now() - t1).toFixed(0)}ms — ${navGrid.cols}×${navGrid.rows}`);
+        await this._buildWorld();
 
         // Flags (server-side: data-only, no mesh)
         this.flags = [];
@@ -129,7 +119,7 @@ export class ServerGame {
         );
 
         // Wire NavGrid + pathfinding + threat scanning
-        this.aiManager.setNavGrid(navGrid, heightGrid, this.island.obstacleBounds);
+        this.aiManager.setNavGrid(this.navGrid, this.heightGrid, this.island.obstacleBounds);
 
         // Populate entities list with all AI soldiers
         for (const s of this.aiManager.teamA.soldiers) this.entities.push(s);
@@ -441,16 +431,28 @@ export class ServerGame {
             });
         }
 
-        if (this._countdownTimer <= 0) {
-            this._resetRound();
+        if (this._countdownTimer <= 0 && !this._resetting) {
+            // Regenerating the map is async (NavGrid runs in a worker), so this
+            // returns immediately and the countdown keeps ticking harmlessly until
+            // _resetting clears. gameOver stays true throughout, which means _tick()
+            // only broadcasts state — no simulation runs against a half-swapped world.
+            this._resetting = true;
+            this._resetRound()
+                .catch((err) => {
+                    console.error('[Game] Round reset failed:', err);
+                })
+                .finally(() => {
+                    this._resetting = false;
+                });
         }
     }
 
     /**
      * Reset all game state for a new round.
      * All players are removed (kicked to spectator on client side).
+     * The map seed and time of day are re-rolled, so every round gets a fresh island.
      */
-    _resetRound() {
+    async _resetRound() {
         console.log('[Game] Resetting round...');
 
         // 1. Remove all players (ejects from vehicles, broadcasts PlayerLeft)
@@ -465,14 +467,19 @@ export class ServerGame {
         }
         this.grenadeManager.grenades.length = 0;
 
-        // 3. Reset vehicles — clear occupants then respawn
+        // 3. Regenerate the map — new seed, new time of day, new flag positions.
+        //    Must happen before vehicles/AI respawn so they land on the new terrain.
+        await this._regenerateWorld();
+
+        // 4. Reset vehicles — clear occupants, move spawns onto the new island, respawn
+        this.vehicleManager.relocateSpawns();
         for (const v of this.vehicleManager.vehicles) {
             v.driver = null;
             v.passengers = [];
             v.respawn();
         }
 
-        // 4. Reset flags to initial state
+        // 5. Reset flags to initial state
         for (const flag of this.flags) {
             flag.owner = 'neutral';
             flag.captureProgress = 0;
@@ -485,12 +492,12 @@ export class ServerGame {
         this.flags[this.flags.length - 1].captureProgress = 1;
         this.flags[this.flags.length - 1].capturingTeam = 'teamB';
 
-        // 5. Reset scores
+        // 6. Reset scores
         this.scores.teamA = 0;
         this.scores.teamB = 0;
         this.scoreTimer = 0;
 
-        // 6. Respawn all AI soldiers at their base flags
+        // 7. Respawn all AI soldiers at their base flags
         const respawnTeam = (teamData, team) => {
             const flag = team === 'teamA' ? this.flags[0] : this.flags[this.flags.length - 1];
             for (const soldier of teamData.soldiers) {
@@ -506,7 +513,7 @@ export class ServerGame {
         respawnTeam(this.aiManager.teamA, 'teamA');
         respawnTeam(this.aiManager.teamB, 'teamB');
 
-        // 7. Clear game state
+        // 8. Clear game state
         this.gameOver = false;
         this._gameOverWinner = null;
         this._killCount = 0;
@@ -515,10 +522,82 @@ export class ServerGame {
             e._deaths = 0;
         }
 
-        // 8. Push restart event
+        // 9. Push restart event
         this.eventQueue.push({ type: 'roundRestart' });
 
         console.log('[Game] New round started');
+    }
+
+    /**
+     * Build (or rebuild) the island and everything derived from it for the current
+     * seed. Shared by init() and the round reset so the two can't drift apart.
+     */
+    async _buildWorld() {
+        const t0 = performance.now();
+
+        // Replacing an existing island: unregister its static bodies and cover spots
+        // first, or the old colliders would keep blocking movement and shots.
+        if (this.island) {
+            this.island.dispose();
+            this.coverSystem.clear();
+        }
+
+        console.log('[Game] Generating island...');
+        this.island = new ServerIsland(this.physics, this.coverSystem, this.seed);
+        const islandMs = performance.now() - t0;
+
+        console.log('[Game] Building NavGrid...');
+        const t1 = performance.now();
+        const { navGrid, heightGrid } = await this.island.buildNavGridAsync();
+        this.navGrid = navGrid;
+        this.heightGrid = heightGrid;
+        this.collidables = this.island.collidables;
+
+        console.log(
+            `[Game] Island generated in ${islandMs.toFixed(0)}ms — ` +
+            `${this.island.collidables.length} collidables; NavGrid built in ` +
+            `${(performance.now() - t1).toFixed(0)}ms — ${navGrid.cols}×${navGrid.rows}`
+        );
+    }
+
+    /**
+     * Re-roll the map seed and time of day, then rebuild the island and everything
+     * bound to it: NavGrid, cover registry, flag positions, AI threat maps.
+     *
+     * Safe to await from _resetRound(): gameOver is still true at that point, so
+     * _tick() only broadcasts state and nothing simulates against a half-built world.
+     */
+    async _regenerateWorld() {
+        const t0 = performance.now();
+        const todNames = ['Day', 'Dusk', 'Storm'];
+
+        this.seed = Math.random() * 65536;
+        this.timeOfDay = Math.floor(Math.random() * 3);
+
+        await this._buildWorld();
+
+        // Flag objects are held by reference from AIManager, VehicleManager and
+        // SpawnSystem, so move them in place instead of rebuilding the array.
+        const flagPositions = this.island.getFlagPositions();
+        for (let i = 0; i < this.flags.length; i++) {
+            this.flags[i].position = flagPositions[i];
+        }
+
+        // Rebind AI to the new grid, terrain and weather
+        this.aiManager.setNavGrid(this.navGrid, this.heightGrid, this.island.obstacleBounds);
+        this.aiManager.applyTimeOfDay(this.timeOfDay);
+
+        // Tell every connected client to rebuild its world with the new seed
+        if (this.network) {
+            this.network.broadcast(
+                encodeWorldSeed(this.seed, 0, this.entities.length, this.timeOfDay)
+            );
+        }
+
+        console.log(
+            `[Game] World regenerated in ${(performance.now() - t0).toFixed(0)}ms — ` +
+            `seed=${this.seed.toFixed(2)}, time of day=${todNames[this.timeOfDay]}`
+        );
     }
 
     /**

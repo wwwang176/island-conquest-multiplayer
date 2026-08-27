@@ -502,8 +502,13 @@ export class ClientGame {
 
     _onWorldSeed(seed, flagLayout, entityCount, timeOfDay) {
         console.log('[Client] WorldSeed received: seed=', seed, 'entities=', entityCount, 'timeOfDay=', timeOfDay);
-        this._timeOfDay = timeOfDay ?? 0;
-        this._applyTimeOfDay(this._timeOfDay);
+
+        // A second WorldSeed means the server regenerated the map for a new round.
+        // Only the world is rebuilt — renderers, HUD, socket and the render loop stay.
+        if (this.island) {
+            this._buildWorld(seed, timeOfDay);
+            return;
+        }
 
         // Prefill all AI soldiers into scoreboard
         for (let i = 0; i < TEAM_SIZE; i++) {
@@ -530,34 +535,20 @@ export class ClientGame {
         this._ragdollWorld.addContactMaterial(defaultContact);
         this._ragdollWorld.defaultContactMaterial = defaultContact;
 
-        const ragdollPhysics = {
+        // Reused on every rebuild, so the island always registers against the same world
+        this._ragdollPhysics = {
             defaultMaterial: defaultMat,
             addBody: (b) => { this._ragdollWorld.addBody(b); },
+            removeBody: (b) => { this._ragdollWorld.removeBody(b); },
         };
-        const stubCover = { register() {} };
-        this.island = new Island(this.scene, ragdollPhysics, stubCover, seed);
+        this._stubCover = { register() {} };
 
-        // Build NavGrid for client-side collision prediction (async, non-blocking)
-        this.island.buildNavGridAsync().then(({ navGrid }) => {
-            this._navGrid = navGrid;
-        });
+        // Island + NavGrid + flags + weather
+        this._buildWorld(seed, timeOfDay);
 
-        // Create flags
-        this._setupFlags();
-
-        // Init VFX
+        // Init VFX (island-independent — the height lookup reads this.island lazily)
         this.tracerSystem = new TracerSystem(this.scene);
         this.impactVFX = new ImpactVFX(this.scene, (x, z) => this.island.getHeightAt(x, z));
-
-        // Storm VFX (rain + lightning) — only when tod === 2
-        this.stormVFX = null;
-        if (this._timeOfDay === 2) {
-            this.stormVFX = new StormVFX(
-                this.scene, this.camera,
-                { sun: this._sun, ambient: this._ambientLight, hemi: this._hemiLight },
-                (x, z) => this.island.getHeightAt(x, z)
-            );
-        }
 
         // Wire ragdoll references to EntityRenderer and VehicleRenderer
         this.entityRenderer.ragdollWorld = this._ragdollWorld;
@@ -578,6 +569,51 @@ export class ClientGame {
         // Start render loop
         this.clock.getDelta(); // consume initial delta
         requestAnimationFrame(this._boundAnimate);
+    }
+
+    /**
+     * Build (or rebuild) everything derived from the map seed: island, NavGrid,
+     * flags and weather VFX.
+     *
+     * Called once on connect and again on every WorldSeed the server sends at
+     * round reset. Deliberately excludes the one-time setup in _onWorldSeed —
+     * re-running that would start a second render loop and a second minimap.
+     */
+    _buildWorld(seed, timeOfDay) {
+        this._timeOfDay = timeOfDay ?? 0;
+        this._applyTimeOfDay(this._timeOfDay);
+
+        // Tear down the previous map, if any
+        if (this.island) {
+            for (const flag of this.flags) flag.dispose();
+            this.flags.length = 0;
+            this._prevFlagStates = [];
+            if (this.stormVFX) {
+                this.stormVFX.dispose();
+                this.stormVFX = null;
+            }
+            this._navGrid = null;
+            this.island.dispose();
+        }
+
+        this.island = new Island(this.scene, this._ragdollPhysics, this._stubCover, seed);
+
+        // Build NavGrid for client-side collision prediction (async, non-blocking)
+        this.island.buildNavGridAsync().then(({ navGrid }) => {
+            this._navGrid = navGrid;
+        });
+
+        this._setupFlags();
+
+        // Storm VFX (rain + lightning) — only when tod === 2
+        this.stormVFX = null;
+        if (this._timeOfDay === 2) {
+            this.stormVFX = new StormVFX(
+                this.scene, this.camera,
+                { sun: this._sun, ambient: this._ambientLight, hemi: this._hemiLight },
+                (x, z) => this.island.getHeightAt(x, z)
+            );
+        }
     }
 
     _setupFlags() {
