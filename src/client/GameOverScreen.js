@@ -36,27 +36,30 @@ export class GameOverScreen {
 
         // Winner banner
         const banner = document.createElement('div');
+        banner.className = 'go-banner';
         banner.style.cssText = `text-align:center;margin-bottom:20px;`;
         banner.innerHTML = `
-            <div style="color:${color};font-size:48px;font-weight:bold;margin-bottom:8px;
+            <div class="go-title" style="color:${color};font-size:48px;font-weight:bold;margin-bottom:8px;
                 text-shadow:0 0 20px ${color}44;">${teamName} WINS</div>
-            <div style="color:#ccc;font-size:22px">${scoreA} - ${scoreB}</div>`;
+            <div class="go-score" style="color:#ccc;font-size:22px">${scoreA} - ${scoreB}</div>`;
         el.appendChild(banner);
 
         // Scoreboard columns container
         const sbContainer = document.createElement('div');
-        sbContainer.style.cssText = `display:flex;align-items:flex-start;gap:32px;
-            background:rgba(0,0,0,0.6);border-radius:10px;padding:20px 28px;
+        sbContainer.className = 'sb-panel sb-columns';
+        sbContainer.style.cssText = `display:flex;gap:32px;
+            background:rgba(0,0,0,0.6);border-radius:10px;
             min-width:600px;border:1px solid rgba(255,255,255,0.1);`;
         sbContainer.innerHTML = `
-            <div id="go-teamA" style="flex:1;min-width:260px;"></div>
+            <div id="go-teamA" class="sb-team" style="flex:1;min-width:260px;"></div>
             <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;"></div>
-            <div id="go-teamB" style="flex:1;min-width:260px;"></div>`;
+            <div id="go-teamB" class="sb-team" style="flex:1;min-width:260px;"></div>`;
         el.appendChild(sbContainer);
 
         // Countdown display
         const countdown = document.createElement('div');
         countdown.id = 'go-countdown';
+        countdown.className = 'go-countdown';
         countdown.style.cssText = `color:#aaa;font-size:16px;margin-top:16px;text-align:center;`;
         countdown.textContent = 'Next round starting...';
         el.appendChild(countdown);
