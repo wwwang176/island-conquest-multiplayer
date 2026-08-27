@@ -186,7 +186,9 @@ export class NetworkManager {
                 }
                 case MsgType.JOIN: {
                     const join = decodeJoin(buf);
-                    this.serverGame.onJoinRequest(clientId, join.team, join.weaponId, join.playerName);
+                    this.serverGame.onJoinRequest(
+                        clientId, join.team, join.weaponId, join.playerName, join.appearance
+                    );
                     break;
                 }
                 case MsgType.LEAVE: {
