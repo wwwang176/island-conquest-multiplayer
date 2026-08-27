@@ -25,6 +25,7 @@ export const MsgType = {
     INPUT_ACK:      0x17,
     JOIN_REJECTED:  0x18,
     SCOREBOARD_SYNC:0x19,
+    PLAYER_APPEARANCE: 0x1A,
 };
 
 // Minimum valid buffer sizes for client→server messages
@@ -200,11 +201,15 @@ export function decodeInput(buf) {
 
 /**
  * Encode join: msgType(1) + teamId(1) + weaponIdLen(1) + weaponId(var) + nameLen(1) + name(var)
+ *              + appearance(1)
+ *
+ * The appearance byte is last so a client that predates the field still decodes
+ * as a valid join — it just resolves to the default appearance.
  */
-export function encodeJoin(teamId, weaponId, playerName) {
+export function encodeJoin(teamId, weaponId, playerName, appearance = 0) {
     const weaponBytes = new TextEncoder().encode(weaponId);
     const nameBytes = new TextEncoder().encode(playerName);
-    const buf = new ArrayBuffer(4 + weaponBytes.length + nameBytes.length);
+    const buf = new ArrayBuffer(5 + weaponBytes.length + nameBytes.length);
     const view = new DataView(buf);
     const u8 = new Uint8Array(buf);
     view.setUint8(0, MsgType.JOIN);
@@ -213,6 +218,7 @@ export function encodeJoin(teamId, weaponId, playerName) {
     u8.set(weaponBytes, 3);
     view.setUint8(3 + weaponBytes.length, nameBytes.length);
     u8.set(nameBytes, 4 + weaponBytes.length);
+    view.setUint8(4 + weaponBytes.length + nameBytes.length, appearance & 0xff);
     return buf;
 }
 
@@ -224,10 +230,13 @@ export function decodeJoin(buf) {
     const weaponId = new TextDecoder().decode(u8.slice(3, 3 + weaponLen));
     const nameLen = view.getUint8(3 + weaponLen);
     const playerName = new TextDecoder().decode(u8.slice(4 + weaponLen, 4 + weaponLen + nameLen));
+    const appearanceOffset = 4 + weaponLen + nameLen;
+    const appearance = appearanceOffset < buf.byteLength ? view.getUint8(appearanceOffset) : 0;
     return {
         team: teamId === 0 ? 'teamA' : 'teamB',
         weaponId,
         playerName,
+        appearance,
     };
 }
 
@@ -333,6 +342,47 @@ export function decodePlayerSpawned(buf) {
         team: view.getUint8(15) === 0 ? 'teamA' : 'teamB',
         weaponId: new TextDecoder().decode(u8.slice(17, 17 + weaponLen)),
     };
+}
+
+// ── PlayerAppearance ──
+
+/**
+ * Encode a batch of player appearances:
+ * msgType(1) + count(1) + N × (entityId(2) + appearance(1))
+ *
+ * Appearance is static per player, so it is pushed once on join (and replayed to
+ * late joiners on connect) instead of riding along in every snapshot. WebSocket
+ * ordering guarantees this arrives before the entity's first snapshot.
+ *
+ * @param {Array<{entityId: number, appearance: number}>} entries
+ */
+export function encodePlayerAppearance(entries) {
+    const count = Math.min(entries.length, 255);
+    const buf = new ArrayBuffer(2 + count * 3);
+    const view = new DataView(buf);
+    view.setUint8(0, MsgType.PLAYER_APPEARANCE);
+    view.setUint8(1, count);
+    for (let i = 0; i < count; i++) {
+        const offset = 2 + i * 3;
+        view.setUint16(offset, entries[i].entityId, true);
+        view.setUint8(offset + 2, entries[i].appearance & 0xff);
+    }
+    return buf;
+}
+
+export function decodePlayerAppearance(buf) {
+    const view = new DataView(buf);
+    const count = view.getUint8(1);
+    const entries = [];
+    for (let i = 0; i < count; i++) {
+        const offset = 2 + i * 3;
+        if (offset + 3 > buf.byteLength) break;
+        entries.push({
+            entityId: view.getUint16(offset, true),
+            appearance: view.getUint8(offset + 2),
+        });
+    }
+    return { entries };
 }
 
 // ── JoinRejected ──

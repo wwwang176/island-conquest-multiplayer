@@ -1,8 +1,62 @@
 import { weaponCardHTML, highlightWeaponCard } from './WeaponCardUI.js';
+import { TEAM_COLORS, soldierHeadColor, soldierLegColor } from './EntityRenderer.js';
+import { SoldierPreview } from './SoldierPreview.js';
+import {
+    COLOR_PALETTE, DEFAULT_APPEARANCE, packAppearance, unpackAppearance, sanitizeAppearance,
+} from '../shared/Appearance.js';
+
+/**
+ * Build the swatch grid for one appearance slot.
+ * Slot 0 renders in its resolved default colour and is labelled as the default.
+ * Colours come from the same resolvers the renderer uses, so a swatch matches
+ * the soldier exactly.
+ * @param {'head'|'legs'} slot
+ * @param {number} teamColor
+ */
+function swatchGridHTML(slot, teamColor) {
+    const swatches = COLOR_PALETTE.map((entry, index) => {
+        // Probe each slot independently by packing the index into just that nibble.
+        const color = slot === 'head'
+            ? soldierHeadColor(packAppearance(index, 0))
+            : soldierLegColor(packAppearance(0, index), teamColor);
+        const isDefault = entry.hex === null;
+        return `<button class="color-swatch" data-slot="${slot}" data-index="${index}"
+            title="${isDefault ? 'Default' : entry.name}"
+            style="width:32px;height:32px;padding:0;border-radius:5px;cursor:pointer;
+            background:#${color.getHexString()};border:2px solid transparent;outline:none;
+            box-shadow:0 0 0 1px rgba(0,0,0,0.5);${isDefault ? 'position:relative' : ''}">
+            ${isDefault ? '<span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:bold;color:rgba(0,0,0,0.55);pointer-events:none">DEF</span>' : ''}
+        </button>`;
+    }).join('');
+
+    return `<div id="swatches-${slot}" style="display:grid;grid-template-columns:repeat(8,32px);gap:6px">${swatches}</div>`;
+}
+
+const APPEARANCE_STORAGE_KEY = 'islandConquest.appearance';
+
+/** Read the last-used appearance so players don't re-pick every round. */
+function loadStoredAppearance() {
+    try {
+        const raw = window.localStorage?.getItem(APPEARANCE_STORAGE_KEY);
+        if (raw === null || raw === undefined) return DEFAULT_APPEARANCE;
+        return sanitizeAppearance(parseInt(raw, 10));
+    } catch {
+        return DEFAULT_APPEARANCE;
+    }
+}
+
+function storeAppearance(appearance) {
+    try {
+        window.localStorage?.setItem(APPEARANCE_STORAGE_KEY, String(appearance));
+    } catch {
+        // Private browsing or blocked storage — the choice just won't persist.
+    }
+}
 
 /**
  * JoinScreen — handles the connection form and the join-game panel
- * (team select + weapon select) that were previously inline in ClientGame.
+ * (team select → weapon select → colour select) that were previously
+ * inline in ClientGame.
  */
 export class JoinScreen {
     constructor() {
@@ -11,11 +65,12 @@ export class JoinScreen {
         this._joinName = 'Player';
         this._joinKeyHandler = null;
         this._blocker = null;
+        this._preview = null;
     }
 
     // ── public getters ──
 
-    /** Current join step: 1 = team select, 2 = weapon select */
+    /** Current join step: 1 = name + team, 2 = weapon, 3 = colours */
     get joinStep() {
         return this._joinStep;
     }
@@ -100,7 +155,7 @@ export class JoinScreen {
 
     /**
      * Create and show the join panel overlay.
-     * @param {(team: string, weaponId: string, playerName: string) => void} onJoin
+     * @param {(team: string, weaponId: string, playerName: string, appearance: number) => void} onJoin
      * @param {() => void} onCancel
      * @param {string} [errorMsg='']
      */
@@ -112,6 +167,8 @@ export class JoinScreen {
             document.removeEventListener('keydown', this._joinKeyHandler);
             this._joinKeyHandler = null;
         }
+        this._preview?.dispose();
+        this._preview = null;
 
         this._joinStep = 1;
 
@@ -150,9 +207,28 @@ export class JoinScreen {
                 </button>
             </div>
             <div id="join-step2" style="display:none;flex-direction:column;align-items:center;">
-                <h2 style="color:#fff;font-size:36px;margin-bottom:12px">SELECT WEAPON</h2>
-                <div id="join-team-badge" style="font-size:14px;font-weight:bold;margin-bottom:18px;
+                <h2 style="color:#fff;font-size:36px;margin-bottom:6px">SELECT COLORS</h2>
+                <div id="join-team-badge" style="font-size:14px;font-weight:bold;margin-bottom:12px;
                     padding:4px 16px;border-radius:4px;"></div>
+                <p style="color:#888;font-size:13px;margin-bottom:16px;max-width:520px;text-align:center">
+                    Your torso stays your team's colour. Pick a head and leg colour so your
+                    squad can pick you out from the COMs.
+                </p>
+                <div style="display:flex;gap:36px;align-items:flex-start">
+                    <div id="join-color-list" style="display:flex;flex-direction:column;gap:20px"></div>
+                    <div id="join-preview" style="border:1px solid #333;border-radius:6px;
+                        background:rgba(255,255,255,0.04);line-height:0"></div>
+                </div>
+                <div style="display:flex;gap:12px;margin-top:20px;">
+                    <button id="join-color-back-btn" style="padding:8px 24px;font-size:14px;border:1px solid #666;
+                        border-radius:4px;background:transparent;color:#aaa;cursor:pointer">Back (Esc)</button>
+                    <button id="join-color-next-btn" style="padding:8px 32px;font-size:16px;font-weight:bold;
+                        border:2px solid #4488ff;border-radius:4px;background:rgba(68,136,255,0.3);
+                        color:#fff;cursor:pointer">NEXT (Space)</button>
+                </div>
+            </div>
+            <div id="join-step3" style="display:none;flex-direction:column;align-items:center;">
+                <h2 style="color:#fff;font-size:36px;margin-bottom:18px">SELECT WEAPON</h2>
                 <div style="display:flex;gap:12px;margin-bottom:20px;color:#fff;">
                     ${weaponCardHTML('join-wp', 1, 'AR15', 'ar', true)}
                     ${weaponCardHTML('join-wp', 2, 'SMG', 'smg', false)}
@@ -185,38 +261,100 @@ export class JoinScreen {
             if (card) card.addEventListener('click', () => highlightJoinWeapon(wid));
         }
 
+        // Appearance starts from whatever the player picked last time
+        let appearance = loadStoredAppearance();
+
+        // Step 2 — colour picker. Built on entry so the default swatches and the
+        // preview's torso can use the team colour just chosen on step 1. The
+        // preview holds the default rifle; the weapon is picked on the next step.
+        const enterColorStep = () => {
+            const teamColor = TEAM_COLORS[this._joinTeam] || 0xaaaaaa;
+
+            const list = document.getElementById('join-color-list');
+            list.innerHTML = `
+                <div>
+                    <div style="color:#aaa;font-size:13px;margin-bottom:8px;letter-spacing:1px">HEAD</div>
+                    ${swatchGridHTML('head', teamColor)}
+                </div>
+                <div>
+                    <div style="color:#aaa;font-size:13px;margin-bottom:8px;letter-spacing:1px">LEGS</div>
+                    ${swatchGridHTML('legs', teamColor)}
+                </div>
+            `;
+
+            const highlightSwatches = () => {
+                const slots = unpackAppearance(appearance);
+                for (const slot of ['head', 'legs']) {
+                    const grid = document.getElementById(`swatches-${slot}`);
+                    if (!grid) continue;
+                    grid.querySelectorAll('.color-swatch').forEach((el) => {
+                        const active = Number(el.dataset.index) === slots[slot];
+                        el.style.borderColor = active ? '#fff' : 'transparent';
+                    });
+                }
+            };
+
+            list.querySelectorAll('.color-swatch').forEach((el) => {
+                el.addEventListener('click', () => {
+                    const slots = unpackAppearance(appearance);
+                    slots[el.dataset.slot] = Number(el.dataset.index);
+                    appearance = packAppearance(slots.head, slots.legs);
+                    highlightSwatches();
+                    this._preview?.setAppearance(appearance);
+                });
+            });
+            highlightSwatches();
+
+            this._preview?.dispose();
+            const container = document.getElementById('join-preview');
+            container.innerHTML = '';
+            this._preview = new SoldierPreview(container, {
+                teamColor, weaponId: selectedWeapon, appearance,
+            });
+        };
+
+        // Move between steps, tearing the preview down when leaving the colour step
+        const showStep = (step) => {
+            if (this._joinStep === 2 && step !== 2) {
+                this._preview?.dispose();
+                this._preview = null;
+            }
+            this._joinStep = step;
+            for (const n of [1, 2, 3]) {
+                const el = document.getElementById(`join-step${n}`);
+                if (el) el.style.display = n === step ? 'flex' : 'none';
+            }
+            if (step === 2) enterColorStep();
+        };
+        this._showStep = showStep;
+
         // Deploy action (shared by button click and Space key)
         const deployAction = () => {
             document.removeEventListener('keydown', this._joinKeyHandler);
             this._joinKeyHandler = null;
+            storeAppearance(appearance);
+            this._preview?.dispose();
+            this._preview = null;
             panel.remove();
-            onJoin(this._joinTeam, selectedWeapon, this._joinName);
+            onJoin(this._joinTeam, selectedWeapon, this._joinName, appearance);
         };
 
-        // Back action (shared by button click and Esc key)
-        const backAction = () => {
-            this._joinStep = 1;
-            document.getElementById('join-step2').style.display = 'none';
-            document.getElementById('join-step1').style.display = 'flex';
-        };
-
-        // Deploy button
         document.getElementById('join-deploy-btn').addEventListener('click', deployAction);
+        document.getElementById('join-color-next-btn').addEventListener('click', () => showStep(3));
+        document.getElementById('join-color-back-btn').addEventListener('click', () => showStep(1));
+        document.getElementById('join-back-btn').addEventListener('click', () => showStep(2));
 
-        // Back button
-        document.getElementById('join-back-btn').addEventListener('click', backAction);
-
-        // Keyboard handler — weapon selection (Digit1-4) + deploy (Space) + back (Esc) in step 2
+        // Keyboard handler — Space advances the colour step (2 → 3); weapon
+        // selection (Digit1-4) and deploy live on step 3. Escape is handled by the
+        // global keydown handler to avoid double-firing.
         this._joinKeyHandler = (e) => {
-            if (this._joinStep !== 2) return;
-            const weaponKeys = { Digit1: 'AR15', Digit2: 'SMG', Digit3: 'LMG', Digit4: 'BOLT' };
-            if (weaponKeys[e.code]) {
-                highlightJoinWeapon(weaponKeys[e.code]);
+            if (this._joinStep === 2) {
+                if (e.code === 'Space') showStep(3);
+            } else if (this._joinStep === 3) {
+                const weaponKeys = { Digit1: 'AR15', Digit2: 'SMG', Digit3: 'LMG', Digit4: 'BOLT' };
+                if (weaponKeys[e.code]) highlightJoinWeapon(weaponKeys[e.code]);
+                if (e.code === 'Space') deployAction();
             }
-            if (e.code === 'Space') {
-                deployAction();
-            }
-            // Escape is handled by the global keydown handler (avoids double-fire)
         };
         document.addEventListener('keydown', this._joinKeyHandler);
 
@@ -225,7 +363,6 @@ export class JoinScreen {
             btn.addEventListener('click', () => {
                 this._joinTeam = btn.dataset.team;
                 this._joinName = document.getElementById('player-name').value.trim() || 'Player';
-                this._joinStep = 2;
 
                 // Show team badge
                 const badge = document.getElementById('join-team-badge');
@@ -237,8 +374,7 @@ export class JoinScreen {
                     badge.style.background = isA ? 'rgba(68,136,255,0.15)' : 'rgba(255,68,68,0.15)';
                 }
 
-                document.getElementById('join-step1').style.display = 'none';
-                document.getElementById('join-step2').style.display = 'flex';
+                showStep(2);
             });
         });
 
@@ -258,18 +394,18 @@ export class JoinScreen {
             document.removeEventListener('keydown', this._joinKeyHandler);
             this._joinKeyHandler = null;
         }
+        this._preview?.dispose();
+        this._preview = null;
+        this._showStep = null;
         const panel = document.getElementById('join-panel');
         if (panel) panel.remove();
     }
 
     /**
-     * Go back from weapon select (step 2) to team select (step 1).
+     * Step back one panel: colours → weapon → name + team.
      */
-    goBackToStep1() {
-        this._joinStep = 1;
-        const step2 = document.getElementById('join-step2');
-        const step1 = document.getElementById('join-step1');
-        if (step2) step2.style.display = 'none';
-        if (step1) step1.style.display = 'flex';
+    goBack() {
+        if (this._joinStep <= 1 || !this._showStep) return;
+        this._showStep(this._joinStep - 1);
     }
 }

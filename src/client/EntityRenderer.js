@@ -4,6 +4,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WeaponDefs } from '../entities/WeaponDefs.js';
 import { InterpolationManager } from './Interpolation.js';
 import { EntityType } from '../shared/protocol.js';
+import {
+    DEFAULT_APPEARANCE, SKIN_COLOR, DEFAULT_LEG_TINT,
+    unpackAppearance, paletteColor,
+} from '../shared/Appearance.js';
 
 const WATER_Y = -0.3;
 const BODY_CENTER_OFFSET = 0.8;
@@ -20,7 +24,7 @@ const _upDir = new THREE.Vector3(0, 1, 0);
 const _gunWorldPos = new THREE.Vector3();
 const _gunWorldQuat = new THREE.Quaternion();
 
-const TEAM_COLORS = {
+export const TEAM_COLORS = {
     teamA: 0x4488ff,
     teamB: 0xff4444,
 };
@@ -140,6 +144,192 @@ export function buildGunMesh(weaponId) {
  * Manages rendering of all remote entities (AI soldiers + other players).
  * Creates/updates/removes soldier meshes based on server snapshot data.
  */
+/**
+ * Head colour for an appearance byte. The default slot keeps the original skin tone.
+ * @returns {THREE.Color}
+ */
+export function soldierHeadColor(appearance) {
+    const hex = paletteColor(unpackAppearance(appearance).head);
+    return new THREE.Color(hex === null ? SKIN_COLOR : hex);
+}
+
+/**
+ * Leg colour for an appearance byte. The default slot reproduces the team tint
+ * legs had before appearances existed — a linear-space multiply, which is why
+ * this lives here rather than in the shared module.
+ * @returns {THREE.Color}
+ */
+export function soldierLegColor(appearance, teamColor) {
+    const hex = paletteColor(unpackAppearance(appearance).legs);
+    return hex === null
+        ? new THREE.Color(teamColor).multiplyScalar(DEFAULT_LEG_TINT)
+        : new THREE.Color(hex);
+}
+
+/**
+ * Build a third-person soldier mesh.
+ *
+ * The torso and hips always carry the team colour; the head and legs come from
+ * the player's chosen appearance (AI COMs pass the default byte and keep the
+ * original skin-toned head and team-tinted legs).
+ *
+ * @param {number} teamColor - hex team colour
+ * @param {string} weaponId
+ * @param {number} [appearance] - packed head/leg palette indices
+ */
+export function buildSoldierMesh(teamColor, weaponId, appearance = DEFAULT_APPEARANCE) {
+    const tc = new THREE.Color(teamColor);
+    const armColor = tc.clone().multiplyScalar(0.7);
+    const hipColor = tc.clone().multiplyScalar(0.5);
+    const legColor = soldierLegColor(appearance, teamColor);
+    const skinColor = soldierHeadColor(appearance);
+
+    const group = new THREE.Group();
+
+    // ── Lower body ──
+    const lowerBody = new THREE.Group();
+
+    const hips = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.15, 0.3),
+        new THREE.MeshLambertMaterial({ color: hipColor })
+    );
+    hips.position.y = 0.75;
+    hips.castShadow = false;
+    lowerBody.add(hips);
+
+    // Legs and arms used to share one material; they are split so the leg
+    // colour can be personal while the arms stay team-tinted.
+    const legMat = new THREE.MeshLambertMaterial({ color: legColor });
+    const limbMat = new THREE.MeshLambertMaterial({ color: armColor });
+
+    const leftLeg = new THREE.Group();
+    leftLeg.position.set(-0.13, 0.7, 0);
+    const leftLegMesh = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.70, 0.18), legMat);
+    leftLegMesh.position.y = -0.35;
+    leftLegMesh.castShadow = false;
+    leftLeg.add(leftLegMesh);
+    lowerBody.add(leftLeg);
+
+    const rightLeg = new THREE.Group();
+    rightLeg.position.set(0.13, 0.7, 0);
+    const rightLegMesh = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.70, 0.18), legMat);
+    rightLegMesh.position.y = -0.35;
+    rightLegMesh.castShadow = false;
+    rightLeg.add(rightLegMesh);
+    lowerBody.add(rightLeg);
+    group.add(lowerBody);
+
+    // ── Upper body (torso + head merged with vertex colors) ──
+    const upperBody = new THREE.Group();
+
+    const torsoGeo = new THREE.BoxGeometry(0.5, 0.6, 0.3);
+    torsoGeo.translate(0, 1.125, 0);
+    _setVertexColor(torsoGeo, tc);
+
+    const headGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+    headGeo.translate(0, 1.575, 0);
+    _setVertexColor(headGeo, skinColor);
+
+    // Head vertices land after the torso's in the merged buffer — remember the
+    // range so the head can be recoloured without rebuilding the mesh.
+    const torsoVertexCount = torsoGeo.attributes.position.count;
+    const headVertexCount = headGeo.attributes.position.count;
+
+    const merged = mergeGeometries([torsoGeo, headGeo]);
+    torsoGeo.dispose(); headGeo.dispose();
+    const torsoHead = new THREE.Mesh(
+        merged,
+        new THREE.MeshLambertMaterial({ vertexColors: true })
+    );
+    torsoHead.castShadow = true;
+    upperBody.add(torsoHead);
+
+    const shoulderPivot = new THREE.Group();
+    shoulderPivot.position.y = 1.35;
+    upperBody.add(shoulderPivot);
+
+    // Reload pivot — tilts arms+gun without affecting aim pitch
+    const reloadPivot = new THREE.Group();
+    shoulderPivot.add(reloadPivot);
+
+    // Arms
+    const rightArmGeo = new THREE.BoxGeometry(0.15, 0.4, 0.15);
+    rightArmGeo.translate(0, -0.2, 0);
+    const rightArm = new THREE.Mesh(rightArmGeo, limbMat);
+    rightArm.position.set(0.2, 0, 0);
+    rightArm.rotation.set(1.1, 0, 0);
+    rightArm.castShadow = true;
+    reloadPivot.add(rightArm);
+
+    const leftArmGeo = new THREE.BoxGeometry(0.15, 0.55, 0.15);
+    leftArmGeo.translate(0, -0.275, 0);
+    const leftArm = new THREE.Mesh(leftArmGeo, limbMat);
+    leftArm.position.set(-0.2, 0, 0);
+    leftArm.rotation.set(1.2, 0, 0.5);
+    leftArm.castShadow = true;
+    reloadPivot.add(leftArm);
+
+    // Gun — detailed model matching original Soldier.js
+    const gun = buildGunMesh(weaponId);
+    gun.position.set(0.05, -0.05, -0.45);
+    gun.castShadow = false;
+    reloadPivot.add(gun);
+
+    // Muzzle flash
+    const flash = createMuzzleFlashMesh();
+    flash.visible = false;
+    const flashDef = WeaponDefs[weaponId];
+    if (flashDef) flash.position.set(0, 0.01, flashDef.tpMuzzleZ);
+    gun.add(flash);
+
+    // Adjust left arm per weapon
+    const def = WeaponDefs[weaponId];
+    if (def && def.tpLeftArmRotX !== undefined) {
+        leftArm.rotation.x = def.tpLeftArmRotX;
+    }
+
+    group.add(upperBody);
+
+    // Store refs for animation
+    group.userData._upperBody = upperBody;
+    group.userData._shoulderPivot = shoulderPivot;
+    group.userData._lowerBody = lowerBody;
+    group.userData._leftLeg = leftLeg;
+    group.userData._rightLeg = rightLeg;
+    group.userData._muzzleFlash = flash;
+    group.userData._gun = gun;
+    group.userData._reloadPivot = reloadPivot;
+    group.userData._leftArm = leftArm;
+
+    // Refs for recolouring an existing mesh (see applySoldierAppearance)
+    group.userData._legMat = legMat;
+    group.userData._torsoHeadGeo = merged;
+    group.userData._headVertexStart = torsoVertexCount;
+    group.userData._headVertexCount = headVertexCount;
+
+    return group;
+}
+
+/**
+ * Recolour a soldier mesh's head and legs in place.
+ * @param {THREE.Group} group - mesh built by buildSoldierMesh
+ * @param {number} appearance - packed head/leg palette indices
+ * @param {number} teamColor - hex team colour, used to resolve default slots
+ */
+export function applySoldierAppearance(group, appearance, teamColor) {
+    const { _legMat, _torsoHeadGeo, _headVertexStart, _headVertexCount } = group.userData;
+    if (!_legMat || !_torsoHeadGeo) return;
+
+    _legMat.color.copy(soldierLegColor(appearance, teamColor));
+
+    const headColor = soldierHeadColor(appearance);
+    const colors = _torsoHeadGeo.attributes.color;
+    for (let i = 0; i < _headVertexCount; i++) {
+        colors.setXYZ(_headVertexStart + i, headColor.r, headColor.g, headColor.b);
+    }
+    colors.needsUpdate = true;
+}
+
 export class EntityRenderer {
     constructor(scene) {
         this.scene = scene;
@@ -147,6 +337,14 @@ export class EntityRenderer {
 
         /** @type {Map<number, {mesh: THREE.Group, team: string, alive: boolean, upperBody, shoulderPivot, lowerBody, leftLeg, rightLeg, walkPhase: number}>} */
         this.entities = new Map();
+
+        /**
+         * Player-chosen appearances, keyed by entityId. Pushed by the server on
+         * join and replayed on connect, so it is always populated before the
+         * entity's first snapshot. AI COMs never appear here.
+         * @type {Map<number, number>}
+         */
+        this._appearances = new Map();
 
         this.ragdollWorld = null;       // Set by ClientGame
         this.impactVFX = null;          // Set by ClientGame
@@ -500,6 +698,7 @@ export class EntityRenderer {
         }
         this.entities.clear();
         this.interp.clear();
+        this._appearances.clear();
 
         // Clean up dropped weapons
         for (const gun of this._droppedWeapons) {
@@ -876,9 +1075,29 @@ export class EntityRenderer {
         return { mesh, team, isGrenade: true, alive: true };
     }
 
+    /**
+     * Record player appearances pushed by the server.
+     * Meshes already in the scene are recoloured in place so a late-arriving
+     * appearance still lands on the right soldier.
+     * @param {Array<{entityId: number, appearance: number}>} entries
+     */
+    setAppearances(entries) {
+        for (const { entityId, appearance } of entries) {
+            this._appearances.set(entityId, appearance);
+            const entry = this.entities.get(entityId);
+            if (entry) applySoldierAppearance(entry.mesh, appearance, TEAM_COLORS[entry.team] || 0xaaaaaa);
+        }
+    }
+
+    /** Drop a player's appearance when they leave, so a reused id starts clean. */
+    forgetAppearance(entityId) {
+        this._appearances.delete(entityId);
+    }
+
     _createEntity(entityId, team, weaponId) {
         const color = TEAM_COLORS[team] || 0xaaaaaa;
-        const mesh = this._buildSoldierMesh(color, weaponId);
+        const appearance = this._appearances.get(entityId) ?? DEFAULT_APPEARANCE;
+        const mesh = buildSoldierMesh(color, weaponId, appearance);
         mesh.userData.entityId = entityId;
         mesh.userData.team = team;
         this.scene.add(mesh);
@@ -914,123 +1133,6 @@ export class EntityRenderer {
         };
     }
 
-    _buildSoldierMesh(color, weaponId) {
-        const tc = new THREE.Color(color);
-        const limbColor = tc.clone().multiplyScalar(0.7);
-        const hipColor = tc.clone().multiplyScalar(0.5);
-        const skinColor = new THREE.Color(0xddbb99);
-
-        const group = new THREE.Group();
-
-        // ── Lower body ──
-        const lowerBody = new THREE.Group();
-
-        const hips = new THREE.Mesh(
-            new THREE.BoxGeometry(0.5, 0.15, 0.3),
-            new THREE.MeshLambertMaterial({ color: hipColor })
-        );
-        hips.position.y = 0.75;
-        hips.castShadow = false;
-        lowerBody.add(hips);
-
-        const limbMat = new THREE.MeshLambertMaterial({ color: limbColor });
-
-        const leftLeg = new THREE.Group();
-        leftLeg.position.set(-0.13, 0.7, 0);
-        const leftLegMesh = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.70, 0.18), limbMat);
-        leftLegMesh.position.y = -0.35;
-        leftLegMesh.castShadow = false;
-        leftLeg.add(leftLegMesh);
-        lowerBody.add(leftLeg);
-
-        const rightLeg = new THREE.Group();
-        rightLeg.position.set(0.13, 0.7, 0);
-        const rightLegMesh = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.70, 0.18), limbMat);
-        rightLegMesh.position.y = -0.35;
-        rightLegMesh.castShadow = false;
-        rightLeg.add(rightLegMesh);
-        lowerBody.add(rightLeg);
-        group.add(lowerBody);
-
-        // ── Upper body (torso + head merged with vertex colors) ──
-        const upperBody = new THREE.Group();
-
-        const torsoGeo = new THREE.BoxGeometry(0.5, 0.6, 0.3);
-        torsoGeo.translate(0, 1.125, 0);
-        _setVertexColor(torsoGeo, tc);
-
-        const headGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-        headGeo.translate(0, 1.575, 0);
-        _setVertexColor(headGeo, skinColor);
-
-        const merged = mergeGeometries([torsoGeo, headGeo]);
-        torsoGeo.dispose(); headGeo.dispose();
-        const torsoHead = new THREE.Mesh(
-            merged,
-            new THREE.MeshLambertMaterial({ vertexColors: true })
-        );
-        torsoHead.castShadow = true;
-        upperBody.add(torsoHead);
-
-        const shoulderPivot = new THREE.Group();
-        shoulderPivot.position.y = 1.35;
-        upperBody.add(shoulderPivot);
-
-        // Reload pivot — tilts arms+gun without affecting aim pitch
-        const reloadPivot = new THREE.Group();
-        shoulderPivot.add(reloadPivot);
-
-        // Arms
-        const rightArmGeo = new THREE.BoxGeometry(0.15, 0.4, 0.15);
-        rightArmGeo.translate(0, -0.2, 0);
-        const rightArm = new THREE.Mesh(rightArmGeo, limbMat);
-        rightArm.position.set(0.2, 0, 0);
-        rightArm.rotation.set(1.1, 0, 0);
-        rightArm.castShadow = true;
-        reloadPivot.add(rightArm);
-
-        const leftArmGeo = new THREE.BoxGeometry(0.15, 0.55, 0.15);
-        leftArmGeo.translate(0, -0.275, 0);
-        const leftArm = new THREE.Mesh(leftArmGeo, limbMat);
-        leftArm.position.set(-0.2, 0, 0);
-        leftArm.rotation.set(1.2, 0, 0.5);
-        leftArm.castShadow = true;
-        reloadPivot.add(leftArm);
-
-        // Gun — detailed model matching original Soldier.js
-        const gun = buildGunMesh(weaponId);
-        gun.position.set(0.05, -0.05, -0.45);
-        gun.castShadow = false;
-        reloadPivot.add(gun);
-
-        // Muzzle flash
-        const flash = createMuzzleFlashMesh();
-        flash.visible = false;
-        const flashDef = WeaponDefs[weaponId];
-        if (flashDef) flash.position.set(0, 0.01, flashDef.tpMuzzleZ);
-        gun.add(flash);
-
-        // Adjust left arm per weapon
-        const def = WeaponDefs[weaponId];
-        if (def && def.tpLeftArmRotX !== undefined) {
-            leftArm.rotation.x = def.tpLeftArmRotX;
-        }
-
-        group.add(upperBody);
-
-        // Store refs for animation
-        group.userData._upperBody = upperBody;
-        group.userData._shoulderPivot = shoulderPivot;
-        group.userData._lowerBody = lowerBody;
-        group.userData._leftLeg = leftLeg;
-        group.userData._rightLeg = rightLeg;
-        group.userData._muzzleFlash = flash;
-        group.userData._gun = gun;
-        group.userData._reloadPivot = reloadPivot;
-        group.userData._leftArm = leftArm;
-
-        return group;
-    }
 
     _swapGun(entry, weaponId) {
         const parent = entry._reloadPivot || entry.shoulderPivot;

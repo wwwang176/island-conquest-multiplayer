@@ -3,8 +3,10 @@ import { WeaponDefs } from '../entities/WeaponDefs.js';
 import {
     encodeWorldSeed, encodeSnapshot, encodeEventBatch, encodeScoreboardSync,
     encodeInputAck, encodePlayerSpawned, encodePlayerJoined, encodePlayerLeft,
-    encodeJoinRejected, EntityType, EventType, SurfaceType, KeyBit,
+    encodeJoinRejected, encodePlayerAppearance,
+    EntityType, EventType, SurfaceType, KeyBit,
 } from '../shared/protocol.js';
+import { sanitizeAppearance, DEFAULT_APPEARANCE } from '../shared/Appearance.js';
 import { ServerIsland } from './ServerIsland.js';
 import { ServerPhysics } from './ServerPhysics.js';
 import { ServerAIManager } from './ServerAIManager.js';
@@ -930,6 +932,16 @@ export class ServerGame {
         const spectatorCount = this.network.getSpectatorCount();
         this.network.send(ws, encodeScoreboardSync(sbEntries, spectatorCount));
 
+        // Replay every current player's appearance so late joiners colour them
+        // correctly the first time they show up in a snapshot
+        const appearances = [];
+        for (const [, p] of this.players) {
+            appearances.push({ entityId: p._entityId, appearance: p.appearance ?? DEFAULT_APPEARANCE });
+        }
+        if (appearances.length > 0) {
+            this.network.send(ws, encodePlayerAppearance(appearances));
+        }
+
         // If game is in end-of-round countdown, send GAME_OVER + current countdown
         // so the late joiner sees the result screen immediately
         if (this.gameOver && this._gameOverWinner) {
@@ -981,8 +993,9 @@ export class ServerGame {
      * @param {string} team - 'teamA' or 'teamB'
      * @param {string} weaponId - e.g. 'AR15'
      * @param {string} playerName
+     * @param {number} [appearance=0] - packed head/leg palette indices
      */
-    onJoinRequest(clientId, team, weaponId, playerName) {
+    onJoinRequest(clientId, team, weaponId, playerName, appearance = DEFAULT_APPEARANCE) {
         // Block joins during countdown
         if (this.gameOver) {
             console.log(`[Game] Client ${clientId} tried to join during countdown, ignoring`);
@@ -1040,6 +1053,7 @@ export class ServerGame {
             clientId, playerName, weaponId
         );
         player._entityId = entityId;
+        player.appearance = sanitizeAppearance(appearance);
         player.eventBus = this.eventBus;
         player.getHeightAt = (x, z) => this.island.getHeightAt(x, z);
         player.navGrid = this.navGrid;
@@ -1077,6 +1091,12 @@ export class ServerGame {
             // Broadcast PlayerJoined to all other clients
             const joinBuf = encodePlayerJoined(entityId, playerName, team);
             this.network.broadcastExcept(joinBuf, clientId);
+
+            // Appearance goes to everyone, the joiner included — they see their own
+            // soldier in the death cam and while spectating.
+            this.network.broadcast(
+                encodePlayerAppearance([{ entityId, appearance: player.appearance }])
+            );
         }
 
         console.log(`[Game] Player "${playerName}" spawned as entity ${entityId} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);

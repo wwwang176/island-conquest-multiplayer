@@ -2,7 +2,7 @@ import {
     MsgType, decodeWorldSeed, decodeSnapshot, decodeEventBatch,
     decodePong, decodePlayerSpawned, decodeInputAck,
     decodePlayerJoined, decodePlayerLeft, decodeJoinRejected,
-    decodeScoreboardSync,
+    decodeScoreboardSync, decodePlayerAppearance,
     encodeInput, encodeJoin, encodeLeave, encodeRespawn, encodePing,
 } from '../shared/protocol.js';
 
@@ -24,6 +24,7 @@ export class NetworkClient {
         this.onInputAck = null;        // (lastProcessedTick, x, y, z, ammo, grenades, dmgDirX, dmgDirZ, dmgTimer, vehicleId)
         this.onPlayerJoined = null;    // (playerId, team, playerName)
         this.onPlayerLeft = null;      // (playerId)
+        this.onPlayerAppearance = null; // (entries: {entityId, appearance}[])
         this.onJoinRejected = null;    // (reason)
         this.onConnected = null;       // ()
         this.onDisconnected = null;    // ()
@@ -74,10 +75,10 @@ export class NetworkClient {
         this.ws.send(buf);
     }
 
-    sendJoin(team, weaponId, playerName) {
+    sendJoin(team, weaponId, playerName, appearance = 0) {
         if (!this.connected) return;
         const teamId = team === 'teamA' ? 0 : 1;
-        const buf = encodeJoin(teamId, weaponId, playerName);
+        const buf = encodeJoin(teamId, weaponId, playerName, appearance);
         this.ws.send(buf);
     }
 
@@ -163,6 +164,13 @@ export class NetworkClient {
                 const data = decodeJoinRejected(buf);
                 if (this.onJoinRejected) {
                     this.onJoinRejected(data.reason);
+                }
+                break;
+            }
+            case MsgType.PLAYER_APPEARANCE: {
+                const data = decodePlayerAppearance(buf);
+                if (this.onPlayerAppearance) {
+                    this.onPlayerAppearance(data.entries);
                 }
                 break;
             }
