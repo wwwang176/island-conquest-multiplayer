@@ -4,6 +4,7 @@ import { SoldierPreview } from './SoldierPreview.js';
 import {
     COLOR_PALETTE, DEFAULT_APPEARANCE, packAppearance, unpackAppearance, sanitizeAppearance,
 } from '../shared/Appearance.js';
+import { validatePlayerName } from '../shared/PlayerName.js';
 
 /**
  * Build the swatch grid for one appearance slot.
@@ -66,6 +67,13 @@ export class JoinScreen {
         this._joinKeyHandler = null;
         this._blocker = null;
         this._preview = null;
+
+        /**
+         * Names already in the match, for the up-front duplicate check.
+         * Set by ClientGame; the server still has the final say.
+         * @type {() => Iterable<string>}
+         */
+        this.getTakenNames = () => [];
     }
 
     // ── public getters ──
@@ -358,11 +366,23 @@ export class JoinScreen {
         };
         document.addEventListener('keydown', this._joinKeyHandler);
 
-        // Team selection -> advance to step 2
+        // Team selection submits the name — check it here rather than letting the
+        // player pick colours and a weapon only to be rejected on deploy.
+        const errorLine = document.getElementById('join-error');
         panel.querySelectorAll('.team-btn').forEach(btn => {
             btn.addEventListener('click', () => {
+                const nameInput = document.getElementById('player-name');
+                const check = validatePlayerName(nameInput.value, this.getTakenNames());
+                if (!check.ok) {
+                    if (errorLine) errorLine.textContent = check.error;
+                    nameInput.focus();
+                    nameInput.select();
+                    return;
+                }
+                if (errorLine) errorLine.textContent = '';
+
                 this._joinTeam = btn.dataset.team;
-                this._joinName = document.getElementById('player-name').value.trim() || 'Player';
+                this._joinName = check.name;
 
                 // Show team badge
                 const badge = document.getElementById('join-team-badge');

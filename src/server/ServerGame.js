@@ -7,6 +7,7 @@ import {
     EntityType, EventType, SurfaceType, KeyBit,
 } from '../shared/protocol.js';
 import { sanitizeAppearance, DEFAULT_APPEARANCE } from '../shared/Appearance.js';
+import { validatePlayerName } from '../shared/PlayerName.js';
 import { ServerIsland } from './ServerIsland.js';
 import { ServerPhysics } from './ServerPhysics.js';
 import { ServerAIManager } from './ServerAIManager.js';
@@ -1023,28 +1024,18 @@ export class ServerGame {
         // Validate weaponId — fall back to AR15 if invalid
         if (!VALID_WEAPONS.includes(weaponId)) weaponId = VALID_WEAPONS[0];
 
-        // ── Sanitize player name ──
-        playerName = String(playerName).trim().replace(/[^\w\s\-]/g, '').substring(0, 16).trim();
-        if (playerName.length === 0) playerName = 'Player';
-
-        // Reject names that look like COM names (e.g. A-3, B-14)
-        if (/^[AB]-\d+$/.test(playerName)) {
-            console.log(`[Game] Client ${clientId} rejected: name "${playerName}" resembles COM format`);
+        // ── Sanitize and check the player name ──
+        // The join screen runs the same rules when the name is submitted; this is
+        // the authoritative pass, and the only one that sees simultaneous joins.
+        const takenNames = [...this.players.values()].map(p => p.playerName);
+        const nameCheck = validatePlayerName(playerName, takenNames);
+        playerName = nameCheck.name;
+        if (!nameCheck.ok) {
+            console.log(`[Game] Client ${clientId} rejected: "${playerName}" — ${nameCheck.error}`);
             if (this.network) {
-                this.network.sendToClient(clientId, encodeJoinRejected('Name not allowed'));
+                this.network.sendToClient(clientId, encodeJoinRejected(nameCheck.error));
             }
             return;
-        }
-
-        // Reject duplicate player names
-        for (const [, p] of this.players) {
-            if (p.playerName === playerName) {
-                console.log(`[Game] Client ${clientId} rejected: name "${playerName}" already taken`);
-                if (this.network) {
-                    this.network.sendToClient(clientId, encodeJoinRejected('Name already taken'));
-                }
-                return;
-            }
         }
 
         console.log(`[Game] Client ${clientId} joining ${team} with ${weaponId} as "${playerName}"`);

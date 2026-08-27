@@ -15,6 +15,7 @@ import { EntityRenderer, buildGunMesh, createMuzzleFlashMesh } from './EntityRen
 import { VehicleRenderer } from './VehicleRenderer.js';
 import { EventType, SurfaceType } from '../shared/protocol.js';
 import { DEFAULT_APPEARANCE } from '../shared/Appearance.js';
+import { sanitizePlayerName } from '../shared/PlayerName.js';
 import { WeaponDefs, GunAnim } from '../entities/WeaponDefs.js';
 import { MOVE_SPEED, TEAM_SIZE } from '../shared/constants.js';
 
@@ -158,6 +159,7 @@ export class ClientGame {
         this.hud = new ClientHUD();
         this.scoreboard = new Scoreboard();
         this.joinScreen = new JoinScreen();
+        this.joinScreen.getTakenNames = () => this.scoreboard.playerNames.values();
         this.deathScreen = new DeathScreen();
         this.deathScreen._onRespawn = (weaponId) => {
             this._fps.weaponId = weaponId;
@@ -319,6 +321,7 @@ export class ClientGame {
         this.network.onPlayerJoined = (playerId, team, playerName) => {
             console.log(`[Client] Player "${playerName}" joined ${team} (entity ${playerId})`);
             this.scoreboard.playerNames.set(playerId, playerName);
+            this.entityRenderer.setPlayerName(playerId, playerName);
             if (!this.scoreboard.data[playerName]) {
                 this.scoreboard.data[playerName] = { kills: 0, deaths: 0, team, weapon: '' };
             }
@@ -329,6 +332,10 @@ export class ClientGame {
         this.network.onPlayerLeft = (playerId) => {
             console.log(`[Client] Player entity ${playerId} left the game`);
             this.entityRenderer.forgetAppearance(playerId);
+            this.entityRenderer.forgetPlayerName(playerId);
+            // Free the name up — scoreboard.data keeps their kills under it, but
+            // the live roster must not keep the name reserved after they leave.
+            this.scoreboard.playerNames.delete(playerId);
         };
         this.network.onPlayerAppearance = (entries) => {
             this.entityRenderer.setAppearances(entries);
@@ -382,8 +389,7 @@ export class ClientGame {
     }
 
     _joinGame(team, weaponId, playerName, appearance = DEFAULT_APPEARANCE) {
-        // Sanitize locally — must match server-side sanitization in ServerGame.onJoinRequest
-        playerName = String(playerName).trim().replace(/[^\w\s\-]/g, '').substring(0, 16).trim() || 'Player';
+        playerName = sanitizePlayerName(playerName);
 
         this._fps.team = team;
         this._fps.weaponId = weaponId;
@@ -640,6 +646,7 @@ export class ClientGame {
         // Register local player in scoreboard (server doesn't send PLAYER_JOINED to self)
         const pName = this._fps.playerName;
         this.scoreboard.playerNames.set(playerId, pName);
+        this.entityRenderer.setPlayerName(playerId, pName);
         if (!this.scoreboard.data[pName]) {
             this.scoreboard.data[pName] = { kills: 0, deaths: 0, team, weapon: weaponId };
         } else {
@@ -1329,6 +1336,14 @@ export class ClientGame {
                 this.hud.updatePing(rtt);
             }
         }
+
+        // Nameplates — sized against the camera, so this runs after the camera
+        // has been placed for this frame and before the draw.
+        this.entityRenderer.setNameplateViewer(
+            this.gameMode === 'spectator' ? null : this._fps.team,
+            this._fps.myEntityId
+        );
+        this.entityRenderer.updateNameplates(this.camera);
 
         // Render
         this.renderer.render(this.scene, this.camera);
