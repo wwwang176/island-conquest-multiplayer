@@ -97,8 +97,15 @@ export class TouchControls {
         return window.innerHeight > window.innerWidth;
     }
 
-    /** Ask for fullscreen + landscape. Safe to call repeatedly. */
-    _enterPresentation() {
+    /**
+     * Ask for fullscreen + landscape. Safe to call repeatedly.
+     *
+     * Public because the join flow calls it too: every tap along connect → team
+     * → colours → weapon → deploy is a user gesture, and each is another chance
+     * to reclaim the browser chrome. The colour step in particular needs the
+     * height. Must stay a synchronous call inside the gesture handler.
+     */
+    enterPresentation() {
         // This runs on every in-game button press, so bail out immediately in
         // the common case rather than re-entering the orientation API each time.
         if (document.fullscreenElement && !this._isPortrait()) {
@@ -685,7 +692,7 @@ export class TouchControls {
         // user can drop out of fullscreen at any time (back gesture, notification
         // shade) and only a gesture can get it back. Still inside the same
         // synchronous handler, so it still counts as a user gesture.
-        if (def.id === 'spec-join' || this.lookEnabled) this._enterPresentation();
+        if (def.id === 'spec-join' || this.lookEnabled) this.enterPresentation();
     }
 
     _release(btn) {

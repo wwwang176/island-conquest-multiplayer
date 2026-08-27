@@ -160,6 +160,8 @@ export class ClientGame {
         this.scoreboard = new Scoreboard();
         this.joinScreen = new JoinScreen();
         this.joinScreen.getTakenNames = () => this.scoreboard.playerNames.values();
+        // Resolved at call time — TouchControls is built later, and only on touch
+        this.joinScreen.onUserGesture = () => this.touchControls?.enterPresentation();
         this.deathScreen = new DeathScreen();
         this.deathScreen._onRespawn = (weaponId) => {
             this._fps.weaponId = weaponId;

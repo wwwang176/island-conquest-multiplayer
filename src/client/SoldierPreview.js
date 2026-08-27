@@ -61,6 +61,19 @@ export class SoldierPreview {
         applySoldierAppearance(this.mesh, appearance, this.teamColor);
     }
 
+    /**
+     * Resize the canvas — used to fit the preview into whatever height the join
+     * panel has left, which on a landscape phone is not much.
+     */
+    resize(width, height) {
+        if (this._disposed) return;
+        this.renderer.setSize(width, height, false);
+        this.renderer.domElement.style.width = `${width}px`;
+        this.renderer.domElement.style.height = `${height}px`;
+        this.camera.aspect = width / height;
+        this.camera.updateProjectionMatrix();
+    }
+
     dispose() {
         if (this._disposed) return;
         this._disposed = true;

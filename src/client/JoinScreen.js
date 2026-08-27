@@ -35,6 +35,24 @@ function swatchGridHTML(slot, teamColor) {
 
 const APPEARANCE_STORAGE_KEY = 'islandConquest.appearance';
 
+// ── Colour step sizing ──
+/** Below this viewport height the colour step switches to its compact layout. */
+const COMPACT_MAX_HEIGHT = 560;
+const SWATCH_PX = 32;
+const COMPACT_SWATCH_PX = 26;
+/** 16 swatches: 6 wide is three rows on desktop, 4 wide is four on a phone. */
+const SWATCH_COLUMNS = 6;
+const COMPACT_SWATCH_COLUMNS = 4;
+const MIN_PREVIEW_PX = 110;
+const MAX_PREVIEW_PX = 340;
+/** Preview canvas width:height, kept constant so the framing never shifts. */
+const PREVIEW_ASPECT = 240 / 340;
+/**
+ * Share of the viewport height the step may fill. The remainder becomes the
+ * margin above and below — the panel is centred, so it splits evenly.
+ */
+const FIT_FILL_RATIO = 0.86;
+
 /** Read the last-used appearance so players don't re-pick every round. */
 function loadStoredAppearance() {
     try {
@@ -56,7 +74,7 @@ function storeAppearance(appearance) {
 
 /**
  * JoinScreen — handles the connection form and the join-game panel
- * (team select → weapon select → colour select) that were previously
+ * (name + team → colours → weapon) that were previously
  * inline in ClientGame.
  */
 export class JoinScreen {
@@ -74,11 +92,19 @@ export class JoinScreen {
          * @type {() => Iterable<string>}
          */
         this.getTakenNames = () => [];
+
+        /**
+         * Called at the start of every button handler in the join flow. Set by
+         * ClientGame to claim fullscreen + landscape on touch devices — each tap
+         * is a user gesture, and the browser only grants fullscreen inside one.
+         * @type {() => void}
+         */
+        this.onUserGesture = () => {};
     }
 
     // ── public getters ──
 
-    /** Current join step: 1 = name + team, 2 = weapon, 3 = colours */
+    /** Current join step: 1 = name + team, 2 = colours, 3 = weapon */
     get joinStep() {
         return this._joinStep;
     }
@@ -117,6 +143,7 @@ export class JoinScreen {
         const btn = document.getElementById('connect-btn');
 
         const doConnect = () => {
+            this.onUserGesture();
             const url = input.value.trim();
             if (!url) return;
             document.getElementById('conn-status').textContent = 'Connecting...';
@@ -158,7 +185,7 @@ export class JoinScreen {
     }
 
     // ═══════════════════════════════════════════════════════
-    // Join Panel (team + weapon select)
+    // Join Panel (name + team → colours → weapon)
     // ═══════════════════════════════════════════════════════
 
     /**
@@ -175,6 +202,7 @@ export class JoinScreen {
             document.removeEventListener('keydown', this._joinKeyHandler);
             this._joinKeyHandler = null;
         }
+        this._stopWatchingViewport();
         this._preview?.dispose();
         this._preview = null;
 
@@ -214,20 +242,19 @@ export class JoinScreen {
                     Cancel (Esc)
                 </button>
             </div>
-            <div id="join-step2" style="display:none;flex-direction:column;align-items:center;">
-                <h2 style="color:#fff;font-size:36px;margin-bottom:6px">SELECT COLORS</h2>
-                <div id="join-team-badge" style="font-size:14px;font-weight:bold;margin-bottom:12px;
-                    padding:4px 16px;border-radius:4px;"></div>
-                <p style="color:#888;font-size:13px;margin-bottom:16px;max-width:520px;text-align:center">
+            <div id="join-step2" style="display:none;flex-direction:column;align-items:center;
+                max-height:100%;overflow-y:auto;">
+                <h2 id="join-color-title" style="color:#fff;font-size:36px;margin-bottom:10px">SELECT COLORS</h2>
+                <p id="join-color-hint" style="color:#888;font-size:13px;margin-bottom:16px;max-width:520px;text-align:center">
                     Your torso stays your team's colour. Pick a head and leg colour so your
                     squad can pick you out from the COMs.
                 </p>
-                <div style="display:flex;gap:36px;align-items:flex-start">
+                <div id="join-color-row" style="display:flex;gap:36px;align-items:flex-start">
                     <div id="join-color-list" style="display:flex;flex-direction:column;gap:20px"></div>
                     <div id="join-preview" style="border:1px solid #333;border-radius:6px;
                         background:rgba(255,255,255,0.04);line-height:0"></div>
                 </div>
-                <div style="display:flex;gap:12px;margin-top:20px;">
+                <div id="join-color-actions" style="display:flex;gap:12px;margin-top:20px;">
                     <button id="join-color-back-btn" style="padding:8px 24px;font-size:14px;border:1px solid #666;
                         border-radius:4px;background:transparent;color:#aaa;cursor:pointer">Back (Esc)</button>
                     <button id="join-color-next-btn" style="padding:8px 32px;font-size:16px;font-weight:bold;
@@ -236,7 +263,9 @@ export class JoinScreen {
                 </div>
             </div>
             <div id="join-step3" style="display:none;flex-direction:column;align-items:center;">
-                <h2 style="color:#fff;font-size:36px;margin-bottom:18px">SELECT WEAPON</h2>
+                <h2 style="color:#fff;font-size:36px;margin-bottom:12px">SELECT WEAPON</h2>
+                <div id="join-team-badge" style="font-size:14px;font-weight:bold;margin-bottom:18px;
+                    padding:4px 16px;border-radius:4px;"></div>
                 <div style="display:flex;gap:12px;margin-bottom:20px;color:#fff;">
                     ${weaponCardHTML('join-wp', 1, 'AR15', 'ar', true)}
                     ${weaponCardHTML('join-wp', 2, 'SMG', 'smg', false)}
@@ -266,7 +295,10 @@ export class JoinScreen {
         const weaponMap = { 'join-wp-ar': 'AR15', 'join-wp-smg': 'SMG', 'join-wp-lmg': 'LMG', 'join-wp-bolt': 'BOLT' };
         for (const [elId, wid] of Object.entries(weaponMap)) {
             const card = document.getElementById(elId);
-            if (card) card.addEventListener('click', () => highlightJoinWeapon(wid));
+            if (card) card.addEventListener('click', () => {
+                this.onUserGesture();
+                highlightJoinWeapon(wid);
+            });
         }
 
         // Appearance starts from whatever the player picked last time
@@ -313,18 +345,23 @@ export class JoinScreen {
             });
             highlightSwatches();
 
-            this._preview?.dispose();
+            this._stopWatchingViewport();
+        this._preview?.dispose();
             const container = document.getElementById('join-preview');
             container.innerHTML = '';
             this._preview = new SoldierPreview(container, {
                 teamColor, weaponId: selectedWeapon, appearance,
             });
+
+            this._fitColorStep();
         };
 
         // Move between steps, tearing the preview down when leaving the colour step
         const showStep = (step) => {
             if (this._joinStep === 2 && step !== 2) {
-                this._preview?.dispose();
+                this._stopWatchingViewport();
+                this._stopWatchingViewport();
+        this._preview?.dispose();
                 this._preview = null;
             }
             this._joinStep = step;
@@ -332,25 +369,37 @@ export class JoinScreen {
                 const el = document.getElementById(`join-step${n}`);
                 if (el) el.style.display = n === step ? 'flex' : 'none';
             }
-            if (step === 2) enterColorStep();
+            if (step === 2) {
+                enterColorStep();
+                this._startWatchingViewport();
+            }
         };
         this._showStep = showStep;
 
         // Deploy action (shared by button click and Space key)
         const deployAction = () => {
+            this.onUserGesture();
             document.removeEventListener('keydown', this._joinKeyHandler);
             this._joinKeyHandler = null;
             storeAppearance(appearance);
-            this._preview?.dispose();
+            this._stopWatchingViewport();
+        this._preview?.dispose();
             this._preview = null;
             panel.remove();
             onJoin(this._joinTeam, selectedWeapon, this._joinName, appearance);
         };
 
         document.getElementById('join-deploy-btn').addEventListener('click', deployAction);
-        document.getElementById('join-color-next-btn').addEventListener('click', () => showStep(3));
-        document.getElementById('join-color-back-btn').addEventListener('click', () => showStep(1));
-        document.getElementById('join-back-btn').addEventListener('click', () => showStep(2));
+        // Every step change is a user gesture — another chance at fullscreen
+        const stepButton = (id, step) => {
+            document.getElementById(id).addEventListener('click', () => {
+                this.onUserGesture();
+                showStep(step);
+            });
+        };
+        stepButton('join-color-next-btn', 3);
+        stepButton('join-color-back-btn', 1);
+        stepButton('join-back-btn', 2);
 
         // Keyboard handler — Space advances the colour step (2 → 3); weapon
         // selection (Digit1-4) and deploy live on step 3. Escape is handled by the
@@ -371,6 +420,7 @@ export class JoinScreen {
         const errorLine = document.getElementById('join-error');
         panel.querySelectorAll('.team-btn').forEach(btn => {
             btn.addEventListener('click', () => {
+                this.onUserGesture();
                 const nameInput = document.getElementById('player-name');
                 const check = validatePlayerName(nameInput.value, this.getTakenNames());
                 if (!check.ok) {
@@ -414,11 +464,97 @@ export class JoinScreen {
             document.removeEventListener('keydown', this._joinKeyHandler);
             this._joinKeyHandler = null;
         }
+        this._stopWatchingViewport();
         this._preview?.dispose();
         this._preview = null;
         this._showStep = null;
         const panel = document.getElementById('join-panel');
         if (panel) panel.remove();
+    }
+
+    /**
+     * Re-fit the colour step whenever the viewport changes under it — rotating
+     * the device, and the reflow that follows entering fullscreen.
+     */
+    _startWatchingViewport() {
+        if (this._viewportHandler) return;
+        this._viewportHandler = () => this._fitColorStep();
+        window.addEventListener('resize', this._viewportHandler);
+        window.addEventListener('orientationchange', this._viewportHandler);
+        window.visualViewport?.addEventListener('resize', this._viewportHandler);
+    }
+
+    _stopWatchingViewport() {
+        if (!this._viewportHandler) return;
+        window.removeEventListener('resize', this._viewportHandler);
+        window.removeEventListener('orientationchange', this._viewportHandler);
+        window.visualViewport?.removeEventListener('resize', this._viewportHandler);
+        this._viewportHandler = null;
+    }
+
+    /**
+     * Size the colour step to the viewport.
+     *
+     * A landscape phone is only ~390px tall, and the step's natural height is
+     * over 500 — enough to push the NEXT button off-screen, which left no way
+     * past this step at all. Below COMPACT_MAX_HEIGHT the chrome is trimmed and
+     * the two swatch grids sit side by side, roughly halving the list; whatever
+     * height is left over then decides how big the soldier can be.
+     */
+    _fitColorStep() {
+        const step = document.getElementById('join-step2');
+        const list = document.getElementById('join-color-list');
+        const previewEl = document.getElementById('join-preview');
+        if (!step || !list || !previewEl || !this._preview) return;
+
+        const compact = window.innerHeight < COMPACT_MAX_HEIGHT;
+        const title = document.getElementById('join-color-title');
+        const hint = document.getElementById('join-color-hint');
+        const row = document.getElementById('join-color-row');
+        const actions = document.getElementById('join-color-actions');
+
+        title.style.fontSize = compact ? '22px' : '36px';
+        title.style.marginBottom = compact ? '6px' : '10px';
+        hint.style.display = compact ? 'none' : '';
+        list.style.flexDirection = compact ? 'row' : 'column';
+        // Side by side the two grids are identical, so they need a clear gutter
+        // between them — 16 swatches twice over reads as one block otherwise.
+        list.style.gap = compact ? '34px' : '20px';
+        row.style.gap = compact ? '18px' : '36px';
+        actions.style.marginTop = compact ? '10px' : '20px';
+
+        const swatch = compact ? COMPACT_SWATCH_PX : SWATCH_PX;
+        const columns = compact ? COMPACT_SWATCH_COLUMNS : SWATCH_COLUMNS;
+        for (const slot of ['head', 'legs']) {
+            const grid = document.getElementById(`swatches-${slot}`);
+            if (!grid) continue;
+            grid.style.gridTemplateColumns = `repeat(${columns}, ${swatch}px)`;
+            grid.style.gap = compact ? '4px' : '6px';
+            grid.querySelectorAll('.color-swatch').forEach((el) => {
+                el.style.width = `${swatch}px`;
+                el.style.height = `${swatch}px`;
+            });
+        }
+
+        // Measure everything except the preview: the row is as tall as the swatch
+        // list, so the preview only costs height once it grows past that.
+        // display:none, not height:0 — the canvas would otherwise just overflow
+        // its container and still count toward scrollHeight.
+        previewEl.style.display = 'none';
+        const withoutPreview = step.scrollHeight;
+        previewEl.style.display = '';
+
+        const listHeight = list.getBoundingClientRect().height;
+        // The tallest the soldier can be while the step still fits the viewport:
+        // it is free up to the list's height, and costs height one-for-one beyond.
+        const fitted = listHeight + (window.innerHeight * FIT_FILL_RATIO - withoutPreview);
+        // The soldier matches the swatch block's height in both layouts: it squares
+        // the row off and leaves the panel real margins instead of filling the
+        // viewport. `fitted` only bites on a viewport too short even for that.
+        const height = Math.round(Math.min(
+            MAX_PREVIEW_PX, Math.max(MIN_PREVIEW_PX, Math.min(listHeight, fitted))
+        ));
+        this._preview.resize(Math.round(height * PREVIEW_ASPECT), height);
     }
 
     /**
