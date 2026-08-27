@@ -36,14 +36,14 @@ export class KillFeed {
         wrapper.appendChild(killer);
         if (entry.killerIsCOM) {
             const tag = document.createElement('span');
-            tag.style.cssText = 'color:#999;font-size:10px';
+            tag.style.cssText = 'color:#999;font-size:0.77em';
             tag.textContent = '(AI)';
             wrapper.appendChild(tag);
         }
 
         const wep = document.createElement('span');
         if (entry.weapon) {
-            wep.style.cssText = 'color:#aaa;font-size:11px';
+            wep.style.cssText = 'color:#aaa;font-size:0.85em';
             wep.textContent = ` [${entry.weapon}] `;
         } else {
             wep.style.color = '#888';
@@ -57,7 +57,7 @@ export class KillFeed {
         wrapper.appendChild(victim);
         if (entry.victimIsCOM) {
             const tag = document.createElement('span');
-            tag.style.cssText = 'color:#999;font-size:10px';
+            tag.style.cssText = 'color:#999;font-size:0.77em';
             tag.textContent = '(AI)';
             wrapper.appendChild(tag);
         }

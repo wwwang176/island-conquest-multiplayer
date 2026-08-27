@@ -22,6 +22,7 @@ import { MOVE_SPEED, TEAM_SIZE } from '../shared/constants.js';
 import { ClientHUD } from './ClientHUD.js';
 import { Scoreboard } from './Scoreboard.js';
 import { JoinScreen } from './JoinScreen.js';
+import { isDialogOpen } from './Dialog.js';
 import { DeathScreen } from './DeathScreen.js';
 import { GameOverScreen } from './GameOverScreen.js';
 import { FPSController } from './FPSController.js';
@@ -158,6 +159,12 @@ export class ClientGame {
         // ── Extracted UI modules ──
         this.hud = new ClientHUD();
         this.scoreboard = new Scoreboard();
+        // The board's ✕ has to clear the TAB toggle too, or the next tap would
+        // just turn the toggle off and leave the board hidden.
+        this.scoreboard.onClose = () => {
+            this.scoreboard.hide();
+            this.touchControls?.setToggle('tab', false);
+        };
         this.joinScreen = new JoinScreen();
         this.joinScreen.getTakenNames = () => this.scoreboard.playerNames.values();
         // Resolved at call time — TouchControls is built later, and only on touch
@@ -1458,6 +1465,8 @@ export class ClientGame {
         if (e.code === 'Escape') {
             const joinPanel = document.getElementById('join-panel');
             if (joinPanel) {
+                // The message dialog handles its own Escape — don't also step back
+                if (isDialogOpen()) return;
                 if (this.joinScreen.joinStep > 1) {
                     // Step back one panel (colour → weapon → name + team)
                     this.joinScreen.goBack();
