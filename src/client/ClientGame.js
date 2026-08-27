@@ -159,6 +159,12 @@ export class ClientGame {
         // ── Extracted UI modules ──
         this.hud = new ClientHUD();
         this.scoreboard = new Scoreboard();
+        // The board's ✕ has to clear the TAB toggle too, or the next tap would
+        // just turn the toggle off and leave the board hidden.
+        this.scoreboard.onClose = () => {
+            this.scoreboard.hide();
+            this.touchControls?.setToggle('tab', false);
+        };
         this.joinScreen = new JoinScreen();
         this.joinScreen.getTakenNames = () => this.scoreboard.playerNames.values();
         // Resolved at call time — TouchControls is built later, and only on touch

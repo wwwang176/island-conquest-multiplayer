@@ -19,6 +19,13 @@ export class Scoreboard {
         /** Number of spectators */
         this.spectatorCount = 0;
 
+        /**
+         * Called when the board's own ✕ is tapped. Set by ClientGame, which hides
+         * the board and clears the TAB toggle that opened it.
+         * @type {(() => void)|null}
+         */
+        this.onClose = null;
+
         this._el = null;
         this._createDOM();
     }
@@ -41,10 +48,42 @@ export class Scoreboard {
         // whatever height is left. On the game-over screen that is what leaves room
         // for the countdown under the panel.
         style.textContent = `
-/* These live here rather than inline because the media query below overrides
-   them — an inline style would win on specificity and silently do nothing. */
+/* These live here rather than inline because the rules below override them —
+   an inline style would win on specificity and silently do nothing. */
+#scoreboard { pointer-events: none; }
 .sb-panel   { padding: 20px 28px; }
 .sb-columns { align-items: flex-start; }
+
+/* Close button — the TAB touch button is a toggle, so the board needs a way to
+   dismiss itself. Keyboard players hold TAB and never see it. */
+#sb-close {
+    display: none;
+    position: absolute; top: 6px; right: 8px;
+    width: 30px; height: 30px;
+    align-items: center; justify-content: center;
+    border: none; border-radius: 6px;
+    background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.75);
+    font-family: inherit; font-size: 16px; line-height: 1;
+    cursor: pointer;
+    /* #scoreboard is pointer-events:none so the game shows through */
+    pointer-events: auto;
+    -webkit-tap-highlight-color: transparent;
+}
+body.touch-mode #sb-close { display: flex; }
+#sb-close:active { background: rgba(255,255,255,0.2); }
+
+/* Tap-anywhere-outside-to-close. Sits just under the board (z-index 150) and
+   only on touch — a keyboard player holds TAB and never needs it. */
+#sb-backdrop {
+    display: none;
+    position: fixed; inset: 0; z-index: 149;
+    pointer-events: auto;
+}
+body.touch-mode #sb-backdrop.sb-backdrop-on { display: block; }
+/* The board is pointer-events:none so play shows through it. With a backdrop
+   behind it that would make a tap on the board itself fall through and close
+   it, so on touch the board takes its own taps back. */
+body.touch-mode #scoreboard { pointer-events: auto; }
 
 @media (max-height: 520px) {
     #scoreboard        { max-height: calc(100vh - ${VIEWPORT_MARGIN_PX * 2}px); }
@@ -92,17 +131,67 @@ export class Scoreboard {
         el.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
             background:rgba(0,0,0,0.8);border-radius:10px;
             display:none;flex-direction:column;
-            pointer-events:none;z-index:150;font-family:Consolas,monospace;
+            z-index:150;font-family:Consolas,monospace;
             min-width:600px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.1);`;
         el.innerHTML = `
+            <button id="sb-close" type="button" aria-label="Close">✕</button>
             <div class="sb-columns" style="display:flex;gap:32px;">
                 <div id="sb-teamA" class="sb-team" style="flex:1;min-width:280px;"></div>
                 <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;"></div>
                 <div id="sb-teamB" class="sb-team" style="flex:1;min-width:280px;"></div>
             </div>
             <div id="sb-spectators" style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);display:none;"></div>`;
+        el.style.position = 'fixed';   // anchors the absolutely-positioned close button
         document.body.appendChild(el);
         this._el = el;
+
+        const backdrop = document.createElement('div');
+        backdrop.id = 'sb-backdrop';
+        document.body.appendChild(backdrop);
+        this._backdrop = backdrop;
+
+        el.querySelector('#sb-close').addEventListener('click', () => this.onClose?.());
+        backdrop.addEventListener('click', () => this.onClose?.());
+
+        this._bindDragScroll();
+    }
+
+    /**
+     * Drag the player list with a finger.
+     *
+     * Native touch scrolling is opted back into by .sb-rows, but only the TAB
+     * board can rely on it: the game-over overlay sits above everything and the
+     * boards are rebuilt on every render, so a plain delegated drag is both
+     * simpler and works the same on either board. Capture phase, to run before
+     * TouchControls' window-level pointer handlers.
+     */
+    _bindDragScroll() {
+        let rows = null;
+        let lastY = 0;
+        let pointerId = null;
+
+        document.addEventListener('pointerdown', (e) => {
+            const el = (e.target instanceof Element) ? e.target.closest('.sb-rows') : null;
+            if (!el || el.scrollHeight <= el.clientHeight) return;
+            rows = el;
+            lastY = e.clientY;
+            pointerId = e.pointerId;
+        }, true);
+
+        document.addEventListener('pointermove', (e) => {
+            if (!rows || e.pointerId !== pointerId) return;
+            rows.scrollTop -= e.clientY - lastY;
+            lastY = e.clientY;
+            e.preventDefault();
+        }, true);
+
+        const end = (e) => {
+            if (e.pointerId !== pointerId) return;
+            rows = null;
+            pointerId = null;
+        };
+        document.addEventListener('pointerup', end, true);
+        document.addEventListener('pointercancel', end, true);
     }
 
     // ── Public API ──
@@ -179,11 +268,13 @@ export class Scoreboard {
         }
 
         this._el.style.display = 'flex';
+        this._backdrop?.classList.add('sb-backdrop-on');
     }
 
     /** Hide the scoreboard overlay. */
     hide() {
         if (this._el) this._el.style.display = 'none';
+        this._backdrop?.classList.remove('sb-backdrop-on');
     }
 
     /**

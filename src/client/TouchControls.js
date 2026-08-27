@@ -76,6 +76,8 @@ export class TouchControls {
         this._pointers = new Map();
         /** @type {Map<string, number>} pulse timers keyed by button id */
         this._pulseTimers = new Map();
+        /** @type {Map<string, boolean>} state of toggle-mode buttons, keyed by id */
+        this._toggles = new Map();
 
         this._injectStyle();
         this._buildDOM();
@@ -209,44 +211,52 @@ export class TouchControls {
     pointer-events: none;
 }
 
-/* Right-hand cluster — anchored to the bottom-right safe area.
-   Kept low and wide rather than tall: landscape phones are only ~390px high,
-   so a vertical stack would run into the kill feed. */
+/* Right-hand cluster — two rows anchored to the bottom-right safe area:
+     [slot-a] [slot-d]
+     [slot-b] [slot-c] [ FIRE ]
+   The bottom row's centres line up (fire is 88px, the rest 56px), and the
+   whole cluster sits low so it stays clear of the kill feed above it. */
 #touch-controls .tb-fire {
     width: 88px; height: 88px; font-size: 14px;
     right: calc(24px + env(safe-area-inset-right));
-    bottom: calc(110px + env(safe-area-inset-bottom));
+    bottom: calc(40px + env(safe-area-inset-bottom));   /* bottoms flush with the row */
 }
-#touch-controls .tb-slot-a {   /* ADS / ASC — up-left of fire */
+#touch-controls .tb-slot-b {   /* JUMP / DESC — leftmost of the bottom row */
     width: 56px; height: 56px;
-    right: calc(126px + env(safe-area-inset-right));
-    bottom: calc(150px + env(safe-area-inset-bottom));
+    right: calc(198px + env(safe-area-inset-right));
+    bottom: calc(40px + env(safe-area-inset-bottom));
 }
-#touch-controls .tb-slot-b {   /* JUMP / DESC — directly under fire */
+#touch-controls .tb-slot-c {   /* RELOAD — between jump and fire */
     width: 56px; height: 56px;
-    right: calc(44px + env(safe-area-inset-right));
-    bottom: calc(44px + env(safe-area-inset-bottom));
+    right: calc(130px + env(safe-area-inset-right));
+    bottom: calc(40px + env(safe-area-inset-bottom));
 }
-#touch-controls .tb-slot-c {   /* RELOAD */
+#touch-controls .tb-slot-d {   /* NADE / EXIT — above reload */
     width: 56px; height: 56px;
-    right: calc(126px + env(safe-area-inset-right));
-    bottom: calc(44px + env(safe-area-inset-bottom));
+    right: calc(130px + env(safe-area-inset-right));
+    bottom: calc(108px + env(safe-area-inset-bottom));
 }
-#touch-controls .tb-slot-d {   /* NADE / EXIT */
+#touch-controls .tb-slot-a {   /* ADS / ASC — above jump */
     width: 56px; height: 56px;
-    right: calc(194px + env(safe-area-inset-right));
-    bottom: calc(44px + env(safe-area-inset-bottom));
+    right: calc(198px + env(safe-area-inset-right));
+    bottom: calc(108px + env(safe-area-inset-bottom));
 }
 
-/* Top-right utility buttons */
+/* Utility buttons stack down the right edge of the minimap, which frees the
+   top-right corner for the kill feed. */
 #touch-controls .tb-top {
-    width: 44px; height: 44px;
+    width: 36px; height: 36px;
     border-radius: 8px;
-    font-size: 11px;
-    top: calc(8px + env(safe-area-inset-top));
+    font-size: 10px;
+    left: calc(140px + env(safe-area-inset-left));
 }
-#touch-controls .tb-tab   { right: calc(72px + env(safe-area-inset-right)); }
-#touch-controls .tb-leave { right: calc(20px + env(safe-area-inset-right)); font-size: 18px; }
+#touch-controls .tb-tab   { top: calc(12px + env(safe-area-inset-top)); }
+#touch-controls .tb-leave { top: calc(56px + env(safe-area-inset-top)); font-size: 15px; }
+/* A toggle that is currently on reads as held down */
+#touch-controls .tb.tb-on {
+    background: rgba(255,255,255,0.34);
+    border-color: rgba(255,255,255,0.55);
+}
 
 /* Spectator buttons */
 #touch-controls .tb-spec {
@@ -297,9 +307,15 @@ export class TouchControls {
     padding: 5px 14px !important;
     white-space: nowrap;
     display: flex !important; align-items: center; gap: 12px;
-    transform: translateX(-50%) scale(0.85);
+    transform: translateX(-50%) scale(0.57);
     transform-origin: bottom center;
 }
+/* Score readout — a third smaller, same as the strips below */
+.touch-mode #net-score {
+    font-size: 12px !important;
+    padding: 4px 12px !important;
+}
+.touch-mode #net-score span { font-size: 9px !important; }
 /* !important above is needed to beat ClientHUD's inline display:block, so the
    inline display:none it uses to hide the HUD has to be re-asserted here. */
 .touch-mode #health-hud[style*="display: none"],
@@ -329,16 +345,13 @@ export class TouchControls {
     width: 120px !important; height: 120px !important;
 }
 .touch-mode #minimap canvas { width: 100%; height: 100%; }
-/* The right column belongs to ammo + buttons on touch, so the kill feed moves
-   under the score readout and is capped to a few rows. */
+/* Top-right, as on desktop — the utility buttons moved to the minimap's edge,
+   so the corner is free again. Small, and capped to a few rows. */
 .touch-mode #kill-feed {
-    top: calc(62px + env(safe-area-inset-top)) !important;
-    right: auto !important;
-    left: 50% !important;
-    transform: translateX(-50%);
-    text-align: center !important;
-    font-size: 11px !important;
-    max-height: 78px; overflow: hidden;
+    top: calc(34px + env(safe-area-inset-top)) !important;
+    right: calc(10px + env(safe-area-inset-right)) !important;
+    font-size: 9px !important;
+    max-height: 70px; overflow: hidden;
 }
 .touch-mode #ping-display {
     top: calc(14px + env(safe-area-inset-top)) !important;
@@ -406,10 +419,11 @@ export class TouchControls {
 
         // Top-right utilities
         this.topButtons = [
+            // A toggle rather than a hold: holding TAB with one thumb leaves only
+            // the other to scroll the roster, and the board is something you read.
             this._makeButton({
-                id: 'tab', label: 'TAB', cls: 'tb-top tb-tab', mode: 'hold', noLook: true,
-                onDown: () => this.cb.onScoreboardDown?.(),
-                onUp:   () => this.cb.onScoreboardUp?.(),
+                id: 'tab', label: 'TAB', cls: 'tb-top tb-tab', mode: 'toggle', noLook: true,
+                onToggle: (on) => (on ? this.cb.onScoreboardDown?.() : this.cb.onScoreboardUp?.()),
             }),
             this._makeButton({
                 // '✕' rather than 'EXIT' — the vehicle button already uses EXIT
@@ -435,6 +449,8 @@ export class TouchControls {
         ];
 
         this.adsButton = this.root.querySelector('[data-tb="ads"]');
+        this.tabButton = this.root.querySelector('[data-tb="tab"]');
+        this.leaveButton = this.root.querySelector('[data-tb="leave"]');
 
         this._allButtons = [
             ...this.infantryButtons, ...this.vehicleButtons,
@@ -682,6 +698,8 @@ export class TouchControls {
         // it may sit between the finger landing and the key bit being set.
         if (def.mode === 'hold') {
             this._setInput(def, true);
+        } else if (def.mode === 'toggle') {
+            this.setToggle(def.id, !this._toggles.get(def.id));
         } else if (def.key || def.act) {
             this._pulse(def);
         }
@@ -702,6 +720,22 @@ export class TouchControls {
         if (def.onUp) def.onUp();
         if (def.mode === 'hold') this._setInput(def, false);
         // Pulse buttons clear on their own timer, so a quick tap still registers.
+        // Toggles keep their state until pressed again or cleared by setToggle.
+    }
+
+    /**
+     * Set a toggle button's state and fire its callback. Public so whatever the
+     * toggle opened can close itself — the scoreboard's ✕ turns TAB back off.
+     * @param {string} id
+     * @param {boolean} on
+     */
+    setToggle(id, on) {
+        if (this._toggles.get(id) === on) return;
+        this._toggles.set(id, on);
+
+        const btn = this.root.querySelector(`[data-tb="${id}"]`);
+        btn?.classList.toggle('tb-on', on);
+        btn?._tbDef.onToggle?.(on);
     }
 
     _pulse(def) {
@@ -776,8 +810,13 @@ export class TouchControls {
         this.stickBase.style.display = playing ? 'block' : 'none';
         this._setVisible(this.infantryButtons, playing && !inVehicle);
         this._setVisible(this.vehicleButtons, playing && inVehicle);
-        this._setVisible(this.topButtons, playing);
+        // TAB works while spectating too, as it does on the keyboard. Leave does
+        // not — a spectator has no game to leave, and JOIN sits in that row.
+        this._setVisible([this.tabButton], playing || spectating);
+        this._setVisible([this.leaveButton], playing);
         this._setVisible(this.spectatorButtons, spectating);
+        // Changing mode closes the board rather than leaving it over the new one
+        this.setToggle('tab', false);
 
         // ADS only exists for weapons that actually have a scope — an always-on
         // button that does nothing is worse on touch than on desktop, where a
