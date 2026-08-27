@@ -22,6 +22,7 @@ import { MOVE_SPEED, TEAM_SIZE } from '../shared/constants.js';
 import { ClientHUD } from './ClientHUD.js';
 import { Scoreboard } from './Scoreboard.js';
 import { JoinScreen } from './JoinScreen.js';
+import { isDialogOpen } from './Dialog.js';
 import { DeathScreen } from './DeathScreen.js';
 import { GameOverScreen } from './GameOverScreen.js';
 import { FPSController } from './FPSController.js';
@@ -1458,6 +1459,8 @@ export class ClientGame {
         if (e.code === 'Escape') {
             const joinPanel = document.getElementById('join-panel');
             if (joinPanel) {
+                // The message dialog handles its own Escape — don't also step back
+                if (isDialogOpen()) return;
                 if (this.joinScreen.joinStep > 1) {
                     // Step back one panel (colour → weapon → name + team)
                     this.joinScreen.goBack();

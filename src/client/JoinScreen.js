@@ -5,6 +5,7 @@ import {
     COLOR_PALETTE, DEFAULT_APPEARANCE, packAppearance, unpackAppearance, sanitizeAppearance,
 } from '../shared/Appearance.js';
 import { validatePlayerName } from '../shared/PlayerName.js';
+import { showDialog, dismissDialog, isDialogOpen } from './Dialog.js';
 
 /**
  * Build the swatch grid for one appearance slot.
@@ -223,7 +224,6 @@ export class JoinScreen {
                         style="padding:6px 10px;font-size:14px;border:none;border-radius:4px;width:160px;
                         background:rgba(255,255,255,0.9);color:#333;outline:none" />
                 </div>
-                <p id="join-error" style="color:#ff4444;font-size:14px;margin-top:4px;min-height:18px;font-weight:bold">${errorMsg}</p>
                 <div style="font-size:14px;color:#aaa;margin-bottom:12px;">Select team:</div>
                 <div style="display:flex;gap:16px;margin-bottom:20px">
                     <button class="team-btn" data-team="teamA"
@@ -283,6 +283,20 @@ export class JoinScreen {
         `;
 
         document.body.appendChild(panel);
+
+        // A rejection from the server rebuilds this panel; surface its reason in
+        // the same dialog the up-front name check uses.
+        if (errorMsg) {
+            showDialog({
+                title: 'CANNOT JOIN',
+                message: errorMsg,
+                onDismiss: () => {
+                    const nameInput = document.getElementById('player-name');
+                    nameInput?.focus();
+                    nameInput?.select();
+                },
+            });
+        }
 
         let selectedWeapon = 'AR15';
 
@@ -405,6 +419,7 @@ export class JoinScreen {
         // selection (Digit1-4) and deploy live on step 3. Escape is handled by the
         // global keydown handler to avoid double-firing.
         this._joinKeyHandler = (e) => {
+            if (isDialogOpen()) return;   // the dialog owns the keyboard while it is up
             if (this._joinStep === 2) {
                 if (e.code === 'Space') showStep(3);
             } else if (this._joinStep === 3) {
@@ -417,19 +432,22 @@ export class JoinScreen {
 
         // Team selection submits the name — check it here rather than letting the
         // player pick colours and a weapon only to be rejected on deploy.
-        const errorLine = document.getElementById('join-error');
         panel.querySelectorAll('.team-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 this.onUserGesture();
                 const nameInput = document.getElementById('player-name');
                 const check = validatePlayerName(nameInput.value, this.getTakenNames());
                 if (!check.ok) {
-                    if (errorLine) errorLine.textContent = check.error;
-                    nameInput.focus();
-                    nameInput.select();
+                    showDialog({
+                        title: 'CANNOT JOIN',
+                        message: check.error,
+                        onDismiss: () => {
+                            nameInput.focus();
+                            nameInput.select();
+                        },
+                    });
                     return;
                 }
-                if (errorLine) errorLine.textContent = '';
 
                 this._joinTeam = btn.dataset.team;
                 this._joinName = check.name;
@@ -464,6 +482,7 @@ export class JoinScreen {
             document.removeEventListener('keydown', this._joinKeyHandler);
             this._joinKeyHandler = null;
         }
+        dismissDialog();
         this._stopWatchingViewport();
         this._preview?.dispose();
         this._preview = null;
@@ -471,6 +490,7 @@ export class JoinScreen {
         const panel = document.getElementById('join-panel');
         if (panel) panel.remove();
     }
+
 
     /**
      * Re-fit the colour step whenever the viewport changes under it — rotating
