@@ -1,5 +1,8 @@
 import { TEAM_SIZE } from '../shared/constants.js';
 
+/** Margin kept clear on all four sides of a board on a short viewport. */
+const VIEWPORT_MARGIN_PX = 14;
+
 /** Escape HTML special characters to prevent XSS when inserting into innerHTML. */
 function escapeHTML(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -27,15 +30,43 @@ export class Scoreboard {
 
         const style = document.createElement('style');
         style.id = 'scoreboard-style';
-        // Desktop deliberately has no overflow rule at all — the full roster is
-        // shown and there is no scrollbar. Only a short viewport gets one.
+        // Shared by the TAB board and the game-over board — Scoreboard renders both
+        // (see renderGameOver) and is constructed before either can appear.
+        //
+        // Desktop deliberately has no overflow rule at all: the full roster shows
+        // and there is no scrollbar. Everything below is a short-viewport concern.
+        //
+        // Rather than guess how tall the surrounding chrome is, both boards keep a
+        // margin on all four sides and let the flex chain hand the player list
+        // whatever height is left. On the game-over screen that is what leaves room
+        // for the countdown under the panel.
         style.textContent = `
+/* These live here rather than inline because the media query below overrides
+   them — an inline style would win on specificity and silently do nothing. */
+.sb-panel   { padding: 20px 28px; }
+.sb-columns { align-items: flex-start; }
+
 @media (max-height: 520px) {
-    /* A landscape phone is ~390px tall and the board wants ~430px, so the
-       player rows scroll while the team header, column header and totals stay put. */
+    #scoreboard        { max-height: calc(100vh - ${VIEWPORT_MARGIN_PX * 2}px); }
+    #game-over-overlay { padding: ${VIEWPORT_MARGIN_PX}px; }
+
+    /* The winner banner is 48px of type on a 390px-tall screen — trim it so the
+       roster and the countdown both still fit. */
+    #game-over-overlay .go-banner    { margin-bottom: 10px; }
+    #game-over-overlay .go-title     { font-size: 28px; margin-bottom: 2px; }
+    #game-over-overlay .go-score     { font-size: 17px; }
+    #game-over-overlay .go-countdown { margin-top: 10px; font-size: 14px; }
+
+    /* min-height:0 at every level, or flex items refuse to shrink below content */
+    .sb-panel   { min-height: 0; padding: 12px 20px; }
+    .sb-columns { min-height: 0; align-items: stretch; }
+    .sb-team    { display: flex; flex-direction: column; min-height: 0; }
+
+    /* The list absorbs the leftover height; headers and totals stay put */
     .sb-rows {
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
-        max-height: calc(100vh - 165px);
         overscroll-behavior: contain;
         /* #scoreboard is pointer-events:none so play shows through, and
            body.touch-mode sets touch-action:none to kill page scrolling —
@@ -57,16 +88,17 @@ export class Scoreboard {
 
         const el = document.createElement('div');
         el.id = 'scoreboard';
+        el.className = 'sb-panel';
         el.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-            background:rgba(0,0,0,0.8);border-radius:10px;padding:20px 28px;
+            background:rgba(0,0,0,0.8);border-radius:10px;
             display:none;flex-direction:column;
             pointer-events:none;z-index:150;font-family:Consolas,monospace;
             min-width:600px;backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,0.1);`;
         el.innerHTML = `
-            <div style="display:flex;align-items:flex-start;gap:32px;">
-                <div id="sb-teamA" style="flex:1;min-width:280px;"></div>
+            <div class="sb-columns" style="display:flex;gap:32px;">
+                <div id="sb-teamA" class="sb-team" style="flex:1;min-width:280px;"></div>
                 <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;"></div>
-                <div id="sb-teamB" style="flex:1;min-width:280px;"></div>
+                <div id="sb-teamB" class="sb-team" style="flex:1;min-width:280px;"></div>
             </div>
             <div id="sb-spectators" style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);display:none;"></div>`;
         document.body.appendChild(el);
@@ -270,6 +302,8 @@ export class Scoreboard {
             html += `<div style="display:flex;color:#888;font-size:11px;padding:2px 6px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:2px;">
                 <span style="flex:1">Name</span><span style="width:30px;text-align:center">K</span>
                 <span style="width:30px;text-align:center">D</span><span style="width:50px;text-align:right">Wpn</span></div>`;
+            // Only the rows scroll on a short viewport — see .sb-rows
+            html += `<div class="sb-rows">`;
             for (const e of entries) {
                 const com = this.isCOM(e.name);
                 const displayName = com ? `${escapeHTML(e.name)}<span style="color:#666;font-weight:normal">(AI)</span>` : escapeHTML(e.name);
@@ -282,6 +316,7 @@ export class Scoreboard {
                     <span style="width:30px;text-align:center;color:#ccc">${e.deaths}</span>
                     <span style="width:50px;text-align:right;color:#888;font-size:11px">${escapeHTML(wpn)}</span></div>`;
             }
+            html += `</div>`;
             html += `<div style="display:flex;font-size:12px;padding:4px 6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.1);color:#aaa;">
                 <span style="flex:1;font-weight:bold">Total</span>
                 <span style="width:30px;text-align:center">${totalK}</span>
