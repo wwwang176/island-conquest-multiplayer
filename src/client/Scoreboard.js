@@ -22,7 +22,39 @@ export class Scoreboard {
 
     // ── DOM creation ──
 
+    _injectStyle() {
+        if (document.getElementById('scoreboard-style')) return;
+
+        const style = document.createElement('style');
+        style.id = 'scoreboard-style';
+        // Desktop deliberately has no overflow rule at all — the full roster is
+        // shown and there is no scrollbar. Only a short viewport gets one.
+        style.textContent = `
+@media (max-height: 520px) {
+    /* A landscape phone is ~390px tall and the board wants ~430px, so the
+       player rows scroll while the team header, column header and totals stay put. */
+    .sb-rows {
+        overflow-y: auto;
+        max-height: calc(100vh - 165px);
+        overscroll-behavior: contain;
+        /* #scoreboard is pointer-events:none so play shows through, and
+           body.touch-mode sets touch-action:none to kill page scrolling —
+           this list has to opt back into both to be scrollable by thumb. */
+        pointer-events: auto;
+        touch-action: pan-y;
+    }
+    .sb-rows::-webkit-scrollbar { width: 4px; }
+    .sb-rows::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.3); border-radius: 2px;
+    }
+    .sb-rows::-webkit-scrollbar-track { background: rgba(255,255,255,0.06); }
+}`;
+        document.head.appendChild(style);
+    }
+
     _createDOM() {
+        this._injectStyle();
+
         const el = document.createElement('div');
         el.id = 'scoreboard';
         el.style.cssText = `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
@@ -74,6 +106,8 @@ export class Scoreboard {
             html += `<div style="display:flex;color:#888;font-size:11px;padding:2px 6px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:2px;">
                 <span style="flex:1">Name</span><span style="width:30px;text-align:center">K</span>
                 <span style="width:30px;text-align:center">D</span><span style="width:50px;text-align:center">Wpn</span><span style="width:48px;text-align:right">Ping</span></div>`;
+            // Only the rows scroll on a short viewport — see .sb-rows
+            html += `<div class="sb-rows">`;
             for (const e of entries) {
                 const isPlayer = e.name === localPlayerName && localEntityId >= 0;
                 const com = this.isCOM(e.name);
@@ -89,6 +123,7 @@ export class Scoreboard {
                     <span style="width:50px;text-align:center;color:#888;font-size:11px">${escapeHTML(wpn)}</span>
                     <span style="width:48px;text-align:right;font-size:11px">${pingStr}</span></div>`;
             }
+            html += `</div>`;
             html += `<div style="display:flex;font-size:12px;padding:4px 6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.1);color:#aaa;">
                 <span style="flex:1;font-weight:bold">Total</span>
                 <span style="width:30px;text-align:center">${totalK}</span>
